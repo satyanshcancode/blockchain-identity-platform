@@ -1,0 +1,15 @@
+{
+  "name": "platform-backend",
+  "version": "0.1.0",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "indexer": "node src/indexer.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ethers": "^6.13.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5"
+  }
+}

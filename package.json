@@ -1,0 +1,18 @@
+{
+  "name": "blockchain-identity-platform-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:local": "hardhat run scripts/deploy.js --network localhost"
+  },
+  "devDependencies": {
+    "hardhat": "2.29.1",
+    "@nomicfoundation/hardhat-toolbox": "5.0.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "5.0.2",
+    "dotenv": "16.6.1"
+  }
+}

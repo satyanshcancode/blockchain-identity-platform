@@ -1,0 +1,50 @@
+version: "3.9"
+
+services:
+  hardhat-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hardhat-node
+    ports:
+      - "8545:8545"
+    volumes:
+      - shared-addresses:/shared
+
+  backend:
+    build:
+      context: ./backend
+    container_name: platform-backend
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+      - RPC_URL=http://hardhat-node:8545
+      # Contract addresses are no longer hardcoded here. scripts/deploy.js
+      # (run by hardhat-node's entrypoint) writes them to the shared volume
+      # below right after deployment, and backend/src/config/loadAddresses.js
+      # waits for and reads that file on startup. This removes the old
+      # "check the logs and update these by hand" failure point.
+      # Well-known Hardhat default account #0 (the deploy.js deployer, which holds
+      # ADMIN_ROLE). Backend uses this to sign auditor/admin-gated read calls like
+      # GET /api/assets/:tokenId/history. DEV ONLY — this key is public, never use
+      # it or this pattern with real funds or on a public network.
+      - PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+    volumes:
+      - shared-addresses:/shared
+    depends_on:
+      - hardhat-node
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: platform-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:4000
+    depends_on:
+      - backend
+
+volumes:
+  shared-addresses:
