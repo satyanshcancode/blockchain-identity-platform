@@ -20,6 +20,10 @@ services:
     environment:
       - PORT=4000
       - RPC_URL=http://hardhat-node:8545
+      # Persistent home for the indexer's SQLite (sql.js) event store - see
+      # backend/src/db.js. Backed by the event-db volume below so it survives
+      # `docker compose down`/`up`, not just an in-session container restart.
+      - EVENTS_DB_PATH=/data/events.db
       # Contract addresses are no longer hardcoded here. scripts/deploy.js
       # (run by hardhat-node's entrypoint) writes them to the shared volume
       # below right after deployment, and backend/src/config/loadAddresses.js
@@ -32,6 +36,7 @@ services:
       - PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
     volumes:
       - shared-addresses:/shared
+      - event-db:/data
     depends_on:
       - hardhat-node
 
@@ -48,3 +53,4 @@ services:
 
 volumes:
   shared-addresses:
+  event-db:

@@ -6,6 +6,7 @@ cache/
 typechain-types/
 coverage/
 coverage.json
+backend/data/
 build/
 dist/
 npm-debug.log*

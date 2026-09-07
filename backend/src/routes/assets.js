@@ -1,6 +1,6 @@
 const express = require("express");
 const { ethers } = require("ethers");
-const { auditLog } = require("../indexer");
+const { getAllEvents } = require("../db");
 
 const router = express.Router();
 
@@ -34,13 +34,13 @@ function getPrivilegedContract() {
 
 // AssetNFT has no ERC721Enumerable extension, so there's no on-chain "give me every
 // tokenId" call. Rather than re-scanning the whole chain's logs on every request, we
-// pull the set of known tokenIds from the live event indexer (see ../indexer.js),
-// which has been listening to AssetMinted/AssetTransferred since the backend started.
-// Note: since that log is in-memory, a backend restart loses history for tokens minted
-// before the restart until Phase-next adds persistent storage for the indexer.
+// pull the set of known tokenIds from the persistent event store (see ../db.js),
+// which the indexer (../indexer.js) keeps up to date - including catching up on
+// anything minted/transferred while the backend was down, so this stays complete
+// across restarts.
 function knownTokenIds() {
   const ids = new Set();
-  for (const entry of auditLog) {
+  for (const entry of getAllEvents()) {
     if (entry.type === "AssetMinted" || entry.type === "AssetTransferred") {
       ids.add(entry.tokenId);
     }

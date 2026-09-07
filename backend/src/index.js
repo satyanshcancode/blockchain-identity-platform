@@ -2,11 +2,17 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { loadDeployedAddresses } = require("./config/loadAddresses");
+const { initDb } = require("./db");
+const indexer = require("./indexer");
 
 async function main() {
-  // Must resolve before requiring routes/indexer below — indexer.js reads
-  // process.env.IDENTITY_REGISTRY_ADDRESS / ASSET_NFT_ADDRESS at require time.
+  // Contract addresses must be resolved before the indexer starts — it reads
+  // process.env.IDENTITY_REGISTRY_ADDRESS / ASSET_NFT_ADDRESS. The events DB
+  // must be open before indexer.start()'s catch-up scan writes to it, and
+  // before routes (which read from it) start serving requests.
   await loadDeployedAddresses();
+  await initDb();
+  await indexer.start();
 
   const identityRoutes = require("./routes/identity");
   const assetRoutes = require("./routes/assets");

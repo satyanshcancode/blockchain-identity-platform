@@ -1,9 +1,9 @@
 const express = require("express");
-const { auditLog } = require("../indexer");
+const { getAllEvents } = require("../db");
 const router = express.Router();
 
 router.get("/", (req, res) => {
-  res.json(auditLog);
+  res.json(getAllEvents());
 });
 
 module.exports = router;
