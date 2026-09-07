@@ -135,10 +135,18 @@ function markProcessedThrough(blockNumber) {
   );
 }
 
+// Writes to a temp file and renames it over DB_PATH rather than writing
+// DB_PATH directly. fs.writeFileSync(DB_PATH, ...) would rewrite the whole
+// file in place; a crash mid-write (kill -9, power loss - not a clean
+// shutdown) could leave it truncated/corrupted. rename() is atomic on both
+// POSIX and NTFS, so a crash mid-write instead leaves the previous, intact
+// version at DB_PATH and only strands the half-written temp file.
 function persistNow() {
   assertReady();
   const data = db.export();
-  fs.writeFileSync(DB_PATH, Buffer.from(data));
+  const tmpPath = `${DB_PATH}.tmp`;
+  fs.writeFileSync(tmpPath, Buffer.from(data));
+  fs.renameSync(tmpPath, DB_PATH);
 }
 
 module.exports = { initDb, insertEvent, getAllEvents, getLastProcessedBlock, markProcessedThrough, persistNow };
