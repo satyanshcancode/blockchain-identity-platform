@@ -27,6 +27,12 @@ contract AssetNFT is ERC721 {
 
     event AssetMinted(uint256 indexed tokenId, address indexed owner, string uri);
     event AssetTransferred(uint256 indexed tokenId, address indexed from, address indexed to);
+    event AssetReclaimed(uint256 indexed tokenId, address indexed from, address indexed to);
+
+    modifier onlyAdmin() {
+        require(roleRegistry.hasRole(roleRegistry.ADMIN_ROLE(), msg.sender), "Not admin");
+        _;
+    }
 
     modifier onlyManagerOrAdmin() {
         require(
@@ -78,15 +84,35 @@ contract AssetNFT is ERC721 {
 
     /// @notice Only a recognized platform user (USER_ROLE) who owns the token and
     /// is sending it to another active identity may transfer it. This is what makes
-    /// RBAC apply to asset movement, not just minting.
+    /// RBAC apply to asset movement, not just minting. The sender's own identity
+    /// must also still be active — otherwise a revoked identity could keep moving
+    /// assets it already holds; that path is reclaimAsset() instead.
     function transferAsset(address to, uint256 tokenId) external onlyUser {
         require(ownerOf(tokenId) == msg.sender, "Not the owner");
+        require(identityRegistry.getIdentity(msg.sender).active, "Sender identity not active");
         IdentityRegistry.Identity memory id = identityRegistry.getIdentity(to);
         require(id.active, "Recipient has no active identity");
 
         _transfer(msg.sender, to, tokenId);
         _history[tokenId].push(TransferRecord(msg.sender, to, block.timestamp));
         emit AssetTransferred(tokenId, msg.sender, to);
+    }
+
+    /// @notice Revocation-recovery path, not a general admin override: lets an admin
+    /// move a token away from an identity that has already been revoked (i.e. its
+    /// IdentityRegistry entry is inactive) to another *active* identity. Reverts if
+    /// the current owner's identity is still active — an admin who wants to move an
+    /// active identity's asset has no path here, only through that identity's own
+    /// transferAsset(). Combined with getComplianceRecord(from).revokedAt, auditors
+    /// can tell a reclaim apart from a voluntary transfer in getTransferHistory().
+    function reclaimAsset(uint256 tokenId, address newOwner) external onlyAdmin {
+        address currentOwner = ownerOf(tokenId);
+        require(!identityRegistry.getIdentity(currentOwner).active, "Current owner identity still active");
+        require(identityRegistry.getIdentity(newOwner).active, "New owner has no active identity");
+
+        _transfer(currentOwner, newOwner, tokenId);
+        _history[tokenId].push(TransferRecord(currentOwner, newOwner, block.timestamp));
+        emit AssetReclaimed(tokenId, currentOwner, newOwner);
     }
 
     /// @notice Auditor/Admin-only full provenance trail for a token: every mint and

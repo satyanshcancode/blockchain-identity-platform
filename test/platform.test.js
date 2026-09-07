@@ -150,4 +150,54 @@ describe("Platform core flow", function () {
     await expect(assets.connect(outsider).getTransferHistory(0))
       .to.be.revertedWith("Not auditor or admin");
   });
+
+  it("blocks a revoked identity from transferring an asset it already holds", async function () {
+    const { admin, manager, user, user2, identities, assets } = await deployPlatform();
+
+    await assets.connect(manager).mintAsset(user.address, "ipfs://asset-1");
+
+    await identities.connect(admin).revokeIdentity(user.address);
+
+    await expect(assets.connect(user).transferAsset(user2.address, 0))
+      .to.be.revertedWith("Sender identity not active");
+
+    // Asset didn't move.
+    expect(await assets.ownerOf(0)).to.equal(user.address);
+  });
+
+  it("lets an admin reclaim an asset from a revoked identity to an active one", async function () {
+    const { admin, manager, user, user2, auditor, identities, assets } = await deployPlatform();
+
+    await assets.connect(manager).mintAsset(user.address, "ipfs://asset-1");
+    await identities.connect(admin).revokeIdentity(user.address);
+
+    await expect(assets.connect(admin).reclaimAsset(0, user2.address))
+      .to.emit(assets, "AssetReclaimed")
+      .withArgs(0, user.address, user2.address);
+
+    expect(await assets.ownerOf(0)).to.equal(user2.address);
+
+    // The reclaim shows up in provenance alongside the mint, distinguishable
+    // from a normal transfer by cross-referencing revokedAt on the compliance record.
+    const history = await assets.connect(auditor).getTransferHistory(0);
+    expect(history.length).to.equal(2);
+    expect(history[1].from).to.equal(user.address);
+    expect(history[1].to).to.equal(user2.address);
+
+    const compliance = await identities.connect(auditor).getComplianceRecord(user.address);
+    expect(compliance.revokedAt).to.be.greaterThan(0);
+    expect(history[1].timestamp).to.be.greaterThanOrEqual(compliance.revokedAt);
+  });
+
+  it("refuses reclaimAsset while the current owner's identity is still active", async function () {
+    const { admin, manager, user, user2, assets } = await deployPlatform();
+
+    await assets.connect(manager).mintAsset(user.address, "ipfs://asset-1");
+
+    // user's identity was never revoked - reclaim must not act as a general force-transfer.
+    await expect(assets.connect(admin).reclaimAsset(0, user2.address))
+      .to.be.revertedWith("Current owner identity still active");
+
+    expect(await assets.ownerOf(0)).to.equal(user.address);
+  });
 });

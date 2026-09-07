@@ -9,7 +9,8 @@ const auditLog = [];
 const identityAbi = ["event IdentityRegistered(address indexed account, string did, string metadataURI)"];
 const assetAbi = [
   "event AssetMinted(uint256 indexed tokenId, address indexed owner, string uri)",
-  "event AssetTransferred(uint256 indexed tokenId, address indexed from, address indexed to)"
+  "event AssetTransferred(uint256 indexed tokenId, address indexed from, address indexed to)",
+  "event AssetReclaimed(uint256 indexed tokenId, address indexed from, address indexed to)"
 ];
 
 async function start() {
@@ -29,6 +30,11 @@ async function start() {
   assetContract.on("AssetTransferred", (tokenId, from, to) => {
     auditLog.push({ type: "AssetTransferred", tokenId: tokenId.toString(), from, to, ts: Date.now() });
     console.log("Asset transferred:", tokenId.toString(), from, "->", to);
+  });
+
+  assetContract.on("AssetReclaimed", (tokenId, from, to) => {
+    auditLog.push({ type: "AssetReclaimed", tokenId: tokenId.toString(), from, to, ts: Date.now() });
+    console.log("Asset reclaimed:", tokenId.toString(), from, "->", to);
   });
 
   console.log("Indexer listening for events...");
