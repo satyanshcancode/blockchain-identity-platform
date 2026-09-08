@@ -4,6 +4,17 @@ import WalletConnect from "./components/WalletConnect";
 import IdentityCard from "./components/IdentityCard";
 import AssetList from "./components/AssetList";
 import AdminAuditPanel from "./components/AdminAuditPanel";
+import VerifyPage from "./components/VerifyPage";
+
+// No router dependency: the app has exactly one real URL route (this one) -
+// everything else is in-memory tab state (see Tabs below). Matched and
+// rendered *before* WalletProvider mounts at all, so the public verification
+// page can never end up depending on wallet state, even by accident - a
+// visitor with no MetaMask and no wallet must be able to load it.
+function matchVerifyRoute(pathname) {
+  const match = pathname.match(/^\/verify\/([^/]+)\/?$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
 
 const TABS = [
   { key: "identity", label: "Identity" },
@@ -40,6 +51,11 @@ function Tabs() {
 }
 
 export default function App() {
+  const verifyTokenId = matchVerifyRoute(window.location.pathname);
+  if (verifyTokenId != null) {
+    return <VerifyPage tokenId={verifyTokenId} />;
+  }
+
   return (
     <WalletProvider>
       <div style={{ fontFamily: "sans-serif" }}>

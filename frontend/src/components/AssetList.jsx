@@ -1,7 +1,15 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { useWallet } from "../context/WalletContext";
 import { getAssets, getAssetsByOwner } from "../services/api";
 import { mintAsset, transferAsset } from "../services/contractService";
+
+// window.location.origin so the URL is absolute and actually reachable when
+// scanned from a phone (a QR code has no notion of "relative to this app"),
+// not just a path for in-app navigation.
+function verifyUrl(tokenId) {
+  return `${window.location.origin}/verify/${tokenId}`;
+}
 
 export default function AssetList() {
   const { address, signer, roles } = useWallet();
@@ -101,6 +109,7 @@ export default function AssetList() {
               <th style={styles.th}>Token ID</th>
               <th style={styles.th}>Owner</th>
               <th style={styles.th}>Metadata URI</th>
+              <th style={styles.th}>Verify</th>
               {address && roles.isUser && <th style={styles.th}>Transfer</th>}
             </tr>
           </thead>
@@ -112,6 +121,14 @@ export default function AssetList() {
                   <td style={styles.td}>{asset.tokenId}</td>
                   <td style={styles.td}>{asset.owner}</td>
                   <td style={styles.td}>{asset.uri}</td>
+                  <td style={styles.td}>
+                    <div style={styles.verifyCell}>
+                      <a href={verifyUrl(asset.tokenId)} target="_blank" rel="noreferrer">
+                        Verify
+                      </a>
+                      <QRCodeSVG value={verifyUrl(asset.tokenId)} size={64} />
+                    </div>
+                  </td>
                   {address && roles.isUser && (
                     <td style={styles.td}>
                       {isMine && (
@@ -170,5 +187,6 @@ const styles = {
   error: { color: "#b00020" },
   table: { width: "100%", borderCollapse: "collapse" },
   th: { textAlign: "left", borderBottom: "1px solid #ccc", padding: "4px 8px" },
-  td: { borderBottom: "1px solid #eee", padding: "4px 8px" }
+  td: { borderBottom: "1px solid #eee", padding: "4px 8px" },
+  verifyCell: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4 }
 };
