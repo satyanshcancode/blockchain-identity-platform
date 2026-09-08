@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useWallet } from "../context/WalletContext";
 import { getAuditLog, getAssetHistory, getComplianceRecord } from "../services/api";
-import { revokeIdentity, reclaimAsset } from "../services/contractService";
+import { registerIdentity, revokeIdentity, reclaimAsset } from "../services/contractService";
 
 // Rendered only if the connected wallet has ADMIN_ROLE or AUDITOR_ROLE - see
 // App.jsx, which doesn't mount this component at all otherwise. The guard
@@ -21,6 +21,13 @@ export default function AdminAuditPanel() {
   const [complianceAddress, setComplianceAddress] = useState("");
   const [compliance, setCompliance] = useState(null);
   const [complianceBusy, setComplianceBusy] = useState(false);
+
+  const [regAccount, setRegAccount] = useState("");
+  const [regDid, setRegDid] = useState("");
+  const [regUri, setRegUri] = useState("");
+  const [regSignature, setRegSignature] = useState("");
+  const [regBusy, setRegBusy] = useState(false);
+  const [regStatus, setRegStatus] = useState(null);
 
   const [revokeAddress, setRevokeAddress] = useState("");
   const [revokeBusy, setRevokeBusy] = useState(false);
@@ -72,6 +79,26 @@ export default function AdminAuditPanel() {
       setError(err.message);
     } finally {
       setComplianceBusy(false);
+    }
+  };
+
+  const handleRegister = async (e) => {
+    e.preventDefault();
+    setRegBusy(true);
+    setRegStatus(null);
+    setError(null);
+    try {
+      await registerIdentity(signer, regAccount, regDid, regUri, regSignature);
+      setRegStatus(`Identity registered for ${regAccount}.`);
+      setRegAccount("");
+      setRegDid("");
+      setRegUri("");
+      setRegSignature("");
+      await loadAuditLog();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRegBusy(false);
     }
   };
 
@@ -182,6 +209,51 @@ export default function AdminAuditPanel() {
       {roles.isAdmin && (
         <>
           <section style={section}>
+            <h3>Register identity</h3>
+            <p style={styles.hint}>
+              Submits a registration signed by someone else - paste the signature (and the
+              exact account/DID/metadata URI it was signed for) from the Identity tab's
+              "Generate signature" flow on *their* wallet, or from scripts/signRegistration.js.
+              The signature must match these fields exactly or the on-chain check rejects it.
+            </p>
+            <form onSubmit={handleRegister}>
+              <div>
+                <label>
+                  Account:{" "}
+                  <input value={regAccount} onChange={(e) => setRegAccount(e.target.value)} placeholder="0x..." required />
+                </label>
+              </div>
+              <div>
+                <label>
+                  DID:{" "}
+                  <input value={regDid} onChange={(e) => setRegDid(e.target.value)} placeholder="did:ethr:0x..." required />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Metadata URI:{" "}
+                  <input value={regUri} onChange={(e) => setRegUri(e.target.value)} placeholder="ipfs://..." required />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Signature:{" "}
+                  <textarea
+                    value={regSignature}
+                    onChange={(e) => setRegSignature(e.target.value)}
+                    placeholder="0x..."
+                    rows={2}
+                    style={styles.textarea}
+                    required
+                  />
+                </label>
+              </div>
+              <button type="submit" disabled={regBusy}>{regBusy ? "Registering..." : "Register"}</button>
+            </form>
+            {regStatus && <p>{regStatus}</p>}
+          </section>
+
+          <section style={section}>
             <h3>Revoke identity</h3>
             <form onSubmit={handleRevoke}>
               <label>
@@ -237,8 +309,10 @@ const box = { border: "1px solid #ccc", padding: 16, marginBottom: 16 };
 const section = { marginTop: 16, paddingTop: 16, borderTop: "1px solid #eee" };
 const styles = {
   error: { color: "#b00020" },
+  hint: { fontSize: 13, color: "#555" },
   scroll: { maxHeight: 240, overflowY: "auto" },
   table: { width: "100%", borderCollapse: "collapse" },
   th: { textAlign: "left", borderBottom: "1px solid #ccc", padding: "4px 8px", position: "sticky", top: 0, background: "#fff" },
-  td: { borderBottom: "1px solid #eee", padding: "4px 8px" }
+  td: { borderBottom: "1px solid #eee", padding: "4px 8px" },
+  textarea: { width: "100%", fontFamily: "monospace", fontSize: 12, display: "block" }
 };

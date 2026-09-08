@@ -128,6 +128,15 @@ export async function transferAsset(signer, to, tokenId) {
   return tx.wait();
 }
 
+// Submits a registration an admin received from someone else (via
+// signRegistration()'s signature + calldata, or scripts/signRegistration.js)
+// - the account/did/metadataURI must match exactly what was signed, or the
+// contract's signature check reverts.
+export async function registerIdentity(signer, account, did, metadataURI, signature) {
+  const tx = await getIdentityRegistry(signer).registerIdentity(account, did, metadataURI, signature);
+  return tx.wait();
+}
+
 export async function revokeIdentity(signer, account) {
   const tx = await getIdentityRegistry(signer).revokeIdentity(account);
   return tx.wait();
