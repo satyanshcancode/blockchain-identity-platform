@@ -10,7 +10,7 @@
 // are made harmless by the DB's unique (tx_hash, log_index) constraint.
 require("dotenv").config();
 const { ethers } = require("ethers");
-const { insertEvent, getLastProcessedBlock, markProcessedThrough, persistNow } = require("./db");
+const { insertEvent, getLastProcessedBlock, markProcessedThrough, resetProcessedBlock, persistNow } = require("./db");
 const { waitForRpc } = require("./config/waitForRpc");
 
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
@@ -83,7 +83,27 @@ async function start() {
   // duplicate insert.
   attachListeners(identityContract, assetContract);
 
-  const lastProcessed = getLastProcessedBlock();
+  let lastProcessed = getLastProcessedBlock();
+
+  // A checkpoint higher than the chain's actual current height means the
+  // chain itself is shorter than what we last indexed - the only way that
+  // happens is a fresh hardhat-node replaced the one we were following (a
+  // Docker restart with no volume for chain state, most likely), not normal
+  // operation. Left alone, the catch-up branch below would just be skipped
+  // silently (lastProcessed < currentBlock is false), pinning the indexer at
+  // a stale, too-high checkpoint forever - it looks "caught up" but has
+  // never seen anything on the new chain. Detect it and re-scan from
+  // genesis instead. resetProcessedBlock() bypasses markProcessedThrough's
+  // monotonic guard and persistNow() writes it immediately, so a crash
+  // during the catch-up below can't strand the stale checkpoint on disk.
+  if (lastProcessed != null && lastProcessed > currentBlock) {
+    console.warn(
+      `Indexer: chain height (${currentBlock}) is behind persisted checkpoint (${lastProcessed}) - chain was likely reset; re-scanning from block 0.`
+    );
+    resetProcessedBlock(0);
+    persistNow();
+    lastProcessed = 0;
+  }
 
   if (lastProcessed == null) {
     console.log("Indexer: no prior checkpoint - starting fresh from block", currentBlock);

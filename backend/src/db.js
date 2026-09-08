@@ -121,18 +121,32 @@ function getLastProcessedBlock() {
   return value != null ? Number(value) : null;
 }
 
-// Monotonic: never rewinds the checkpoint, so out-of-order calls (a live
-// event for an older block landing after a catch-up scan already marked a
-// later one processed) can't make the indexer re-scan blocks it already has.
-function markProcessedThrough(blockNumber) {
+function setLastProcessedBlock(blockNumber) {
   assertReady();
-  const current = getLastProcessedBlock();
-  if (current != null && blockNumber <= current) return;
   db.run(
     `INSERT INTO indexer_state (key, value) VALUES ('lastProcessedBlock', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [String(blockNumber)]
   );
+}
+
+// Monotonic: never rewinds the checkpoint, so out-of-order calls (a live
+// event for an older block landing after a catch-up scan already marked a
+// later one processed) can't make the indexer re-scan blocks it already has.
+function markProcessedThrough(blockNumber) {
+  const current = getLastProcessedBlock();
+  if (current != null && blockNumber <= current) return;
+  setLastProcessedBlock(blockNumber);
+}
+
+// Bypasses markProcessedThrough's monotonic guard - only for indexer.js's
+// "the chain's current height is lower than our checkpoint" recovery path
+// (a fresh hardhat-node replacing the one we last indexed). That guard
+// exists precisely to stop the checkpoint from ever moving backwards during
+// normal operation, so undoing it needs its own explicit, clearly-named
+// function rather than a flag on markProcessedThrough.
+function resetProcessedBlock(blockNumber) {
+  setLastProcessedBlock(blockNumber);
 }
 
 // Writes to a temp file and renames it over DB_PATH rather than writing
@@ -149,4 +163,12 @@ function persistNow() {
   fs.renameSync(tmpPath, DB_PATH);
 }
 
-module.exports = { initDb, insertEvent, getAllEvents, getLastProcessedBlock, markProcessedThrough, persistNow };
+module.exports = {
+  initDb,
+  insertEvent,
+  getAllEvents,
+  getLastProcessedBlock,
+  markProcessedThrough,
+  resetProcessedBlock,
+  persistNow
+};
