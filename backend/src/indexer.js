@@ -11,6 +11,7 @@
 require("dotenv").config();
 const { ethers } = require("ethers");
 const { insertEvent, getLastProcessedBlock, markProcessedThrough, persistNow } = require("./db");
+const { waitForRpc } = require("./config/waitForRpc");
 
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 
@@ -70,6 +71,9 @@ async function catchUpEvent(contract, eventName, fromBlock, toBlock, mapArgs) {
 }
 
 async function start() {
+  console.log(`Indexer: connecting to RPC at ${process.env.RPC_URL}...`);
+  const currentBlock = await waitForRpc(provider);
+
   const identityContract = new ethers.Contract(process.env.IDENTITY_REGISTRY_ADDRESS, identityAbi, provider);
   const assetContract = new ethers.Contract(process.env.ASSET_NFT_ADDRESS, assetAbi, provider);
 
@@ -79,7 +83,6 @@ async function start() {
   // duplicate insert.
   attachListeners(identityContract, assetContract);
 
-  const currentBlock = await provider.getBlockNumber();
   const lastProcessed = getLastProcessedBlock();
 
   if (lastProcessed == null) {
