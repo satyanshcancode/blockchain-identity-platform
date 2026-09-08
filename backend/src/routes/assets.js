@@ -48,20 +48,39 @@ function knownTokenIds() {
   return [...ids].sort((a, b) => Number(a) - Number(b));
 }
 
+// Resolves one tokenId to its live owner + metadata URI. Left to reject
+// naturally (no try/catch here) - callers use Promise.allSettled so one
+// bad tokenId can't take the whole request down; see resolveSettled below.
+async function resolveAsset(contract, tokenId) {
+  const [owner, uri] = await Promise.all([contract.ownerOf(tokenId), contract.tokenURI(tokenId)]);
+  return { tokenId, owner, uri };
+}
+
+// The event log's known tokenIds are historical record, not a live
+// guarantee the token still resolves on this chain - e.g. after a
+// hardhat-node reset (no chain-state volume), old entries can reference a
+// tokenId that never existed on the fresh chain. Promise.allSettled lets
+// every other valid asset resolve normally instead of one bad/reverting
+// tokenId taking the whole response down with a 500; a rejected entry is
+// logged with its tokenId and reason (not silently dropped) and skipped.
+async function resolveSettled(contract, ids, routeLabel) {
+  const results = await Promise.allSettled(ids.map((tokenId) => resolveAsset(contract, tokenId)));
+  const assets = [];
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled") {
+      assets.push(result.value);
+    } else {
+      console.warn(`${routeLabel}: skipping tokenId ${ids[i]} - on-chain read failed: ${result.reason.message}`);
+    }
+  });
+  return assets;
+}
+
 // GET /api/assets — every asset the indexer has seen, with live owner + metadata URI.
 router.get("/", async (req, res) => {
   try {
     const contract = getReadContract();
-    const ids = knownTokenIds();
-    const assets = await Promise.all(
-      ids.map(async (tokenId) => {
-        const [owner, uri] = await Promise.all([
-          contract.ownerOf(tokenId),
-          contract.tokenURI(tokenId)
-        ]);
-        return { tokenId, owner, uri };
-      })
-    );
+    const assets = await resolveSettled(contract, knownTokenIds(), "GET /api/assets");
     res.json(assets);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -72,16 +91,8 @@ router.get("/", async (req, res) => {
 router.get("/owner/:address", async (req, res) => {
   try {
     const contract = getReadContract();
-    const ids = knownTokenIds();
-    const owned = [];
-    for (const tokenId of ids) {
-      const owner = await contract.ownerOf(tokenId);
-      if (owner.toLowerCase() === req.params.address.toLowerCase()) {
-        const uri = await contract.tokenURI(tokenId);
-        owned.push({ tokenId, owner, uri });
-      }
-    }
-    res.json(owned);
+    const assets = await resolveSettled(contract, knownTokenIds(), "GET /api/assets/owner/:address");
+    res.json(assets.filter((a) => a.owner.toLowerCase() === req.params.address.toLowerCase()));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
