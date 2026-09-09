@@ -27,6 +27,7 @@ async function loadDeployedAddresses() {
       try {
         const addresses = JSON.parse(fs.readFileSync(SHARED_ADDRESSES_PATH, "utf8"));
         if (addresses.ROLE_REGISTRY_ADDRESS) process.env.ROLE_REGISTRY_ADDRESS = addresses.ROLE_REGISTRY_ADDRESS;
+        if (addresses.APPROVAL_REGISTRY_ADDRESS) process.env.APPROVAL_REGISTRY_ADDRESS = addresses.APPROVAL_REGISTRY_ADDRESS;
         if (addresses.IDENTITY_REGISTRY_ADDRESS) process.env.IDENTITY_REGISTRY_ADDRESS = addresses.IDENTITY_REGISTRY_ADDRESS;
         if (addresses.ASSET_NFT_ADDRESS) process.env.ASSET_NFT_ADDRESS = addresses.ASSET_NFT_ADDRESS;
         console.log(`Loaded deployed contract addresses from ${SHARED_ADDRESSES_PATH} (deployed ${addresses.deployedAt})`);

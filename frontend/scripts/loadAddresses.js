@@ -37,6 +37,7 @@ async function main() {
         const addresses = JSON.parse(fs.readFileSync(SHARED_ADDRESSES_PATH, "utf8"));
         const lines = [
           `REACT_APP_ROLE_REGISTRY_ADDRESS=${addresses.ROLE_REGISTRY_ADDRESS || ""}`,
+          `REACT_APP_APPROVAL_REGISTRY_ADDRESS=${addresses.APPROVAL_REGISTRY_ADDRESS || ""}`,
           `REACT_APP_IDENTITY_REGISTRY_ADDRESS=${addresses.IDENTITY_REGISTRY_ADDRESS || ""}`,
           `REACT_APP_ASSET_NFT_ADDRESS=${addresses.ASSET_NFT_ADDRESS || ""}`
         ];

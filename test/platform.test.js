@@ -22,25 +22,56 @@ async function signRegistration(identities, signer, account, did, metadataURI) {
   return signer.signTypedData(domain, types, value);
 }
 
+// Reads the ActionProposed event out of a revokeIdentity()/reclaimAsset()
+// transaction's receipt to get the proposal id ApprovalRegistry assigned it -
+// the real (non-static) transaction doesn't hand back its return value
+// directly, so the id has to come from the log the same way a real caller
+// (e.g. the frontend) would get it.
+async function getProposalId(tx, approvalRegistry) {
+  const receipt = await tx.wait();
+  for (const log of receipt.logs) {
+    try {
+      const parsed = approvalRegistry.interface.parseLog(log);
+      if (parsed && parsed.name === "ActionProposed") return parsed.args.proposalId;
+    } catch {
+      // Not a log ApprovalRegistry's interface recognizes - skip it.
+    }
+  }
+  throw new Error("ActionProposed event not found in transaction receipt");
+}
+
 describe("Platform core flow", function () {
   async function deployPlatform() {
-    const [admin, manager, auditor, user, user2, outsider] = await ethers.getSigners();
+    const [admin, manager, auditor, user, user2, outsider, coSigner2, coSigner3] = await ethers.getSigners();
 
     const RoleRegistry = await ethers.getContractFactory("RoleRegistry");
     const roles = await RoleRegistry.deploy(admin.address);
     await roles.waitForDeployment();
 
+    const ADMIN_ROLE = await roles.ADMIN_ROLE();
     const MANAGER_ROLE = await roles.MANAGER_ROLE();
     const AUDITOR_ROLE = await roles.AUDITOR_ROLE();
     const USER_ROLE = await roles.USER_ROLE();
+    const CO_SIGNER_ROLE = await roles.CO_SIGNER_ROLE();
 
     await roles.assignRole(MANAGER_ROLE, manager.address);
     await roles.assignRole(AUDITOR_ROLE, auditor.address);
     await roles.assignRole(USER_ROLE, user.address);
     await roles.assignRole(USER_ROLE, user2.address);
 
+    // 3 designated co-signers (2-of-3 required) - admin plus two more,
+    // deliberately independent of ADMIN_ROLE membership (manager/auditor/
+    // user/user2/outsider hold no CO_SIGNER_ROLE at all here).
+    await roles.assignRole(CO_SIGNER_ROLE, admin.address);
+    await roles.assignRole(CO_SIGNER_ROLE, coSigner2.address);
+    await roles.assignRole(CO_SIGNER_ROLE, coSigner3.address);
+
+    const ApprovalRegistry = await ethers.getContractFactory("ApprovalRegistry");
+    const approvalRegistry = await ApprovalRegistry.deploy(await roles.getAddress());
+    await approvalRegistry.waitForDeployment();
+
     const IdentityRegistry = await ethers.getContractFactory("IdentityRegistry");
-    const identities = await IdentityRegistry.deploy(await roles.getAddress());
+    const identities = await IdentityRegistry.deploy(await roles.getAddress(), await approvalRegistry.getAddress());
     await identities.waitForDeployment();
 
     const user1Sig = await signRegistration(identities, user, user.address, "did:ethr:0xUser", "ipfs://profile");
@@ -50,10 +81,35 @@ describe("Platform core flow", function () {
     await identities.registerIdentity(user2.address, "did:ethr:0xUser2", "ipfs://profile2", user2Sig);
 
     const AssetNFT = await ethers.getContractFactory("AssetNFT");
-    const assets = await AssetNFT.deploy(await roles.getAddress(), await identities.getAddress());
+    const assets = await AssetNFT.deploy(
+      await roles.getAddress(),
+      await identities.getAddress(),
+      await approvalRegistry.getAddress()
+    );
     await assets.waitForDeployment();
 
-    return { admin, manager, auditor, user, user2, outsider, roles, identities, assets, MANAGER_ROLE, AUDITOR_ROLE, USER_ROLE };
+    await approvalRegistry.setAuthorizedCaller(await identities.getAddress(), true);
+    await approvalRegistry.setAuthorizedCaller(await assets.getAddress(), true);
+
+    return {
+      admin,
+      manager,
+      auditor,
+      user,
+      user2,
+      outsider,
+      coSigner2,
+      coSigner3,
+      roles,
+      approvalRegistry,
+      identities,
+      assets,
+      ADMIN_ROLE,
+      MANAGER_ROLE,
+      AUDITOR_ROLE,
+      USER_ROLE,
+      CO_SIGNER_ROLE
+    };
   }
 
   it("registers an identity, assigns a role, and mints an asset", async function () {
@@ -69,11 +125,11 @@ describe("Platform core flow", function () {
   });
 
   it("requires the registered account's own EIP-712 signature, and rejects replay", async function () {
-    const { admin, outsider, roles, identities } = await deployPlatform();
+    const { admin, outsider, roles, approvalRegistry } = await deployPlatform();
 
-    const [, , , , , , freshAccount] = await ethers.getSigners();
+    const [, , , , , , , , freshAccount] = await ethers.getSigners();
     const IdentityRegistry = await ethers.getContractFactory("IdentityRegistry");
-    const freshIdentities = await IdentityRegistry.deploy(await roles.getAddress());
+    const freshIdentities = await IdentityRegistry.deploy(await roles.getAddress(), await approvalRegistry.getAddress());
     await freshIdentities.waitForDeployment();
 
     // Signature from the wrong account is rejected.
@@ -152,11 +208,14 @@ describe("Platform core flow", function () {
   });
 
   it("blocks a revoked identity from transferring an asset it already holds", async function () {
-    const { admin, manager, user, user2, identities, assets } = await deployPlatform();
+    const { admin, coSigner2, manager, user, user2, identities, assets, approvalRegistry } = await deployPlatform();
 
     await assets.connect(manager).mintAsset(user.address, "ipfs://asset-1");
 
-    await identities.connect(admin).revokeIdentity(user.address);
+    const tx = await identities.connect(admin).revokeIdentity(user.address);
+    const proposalId = await getProposalId(tx, approvalRegistry);
+    await identities.connect(coSigner2).approveRevokeIdentity(proposalId);
+    expect((await identities.getIdentity(user.address)).active).to.equal(false);
 
     await expect(assets.connect(user).transferAsset(user2.address, 0))
       .to.be.revertedWith("Sender identity not active");
@@ -165,13 +224,21 @@ describe("Platform core flow", function () {
     expect(await assets.ownerOf(0)).to.equal(user.address);
   });
 
-  it("lets an admin reclaim an asset from a revoked identity to an active one", async function () {
-    const { admin, manager, user, user2, auditor, identities, assets } = await deployPlatform();
+  it("lets co-signers reclaim an asset from a revoked identity to an active one, via 2-of-N approval", async function () {
+    const { admin, coSigner2, manager, user, user2, auditor, identities, assets, approvalRegistry } = await deployPlatform();
 
     await assets.connect(manager).mintAsset(user.address, "ipfs://asset-1");
-    await identities.connect(admin).revokeIdentity(user.address);
 
-    await expect(assets.connect(admin).reclaimAsset(0, user2.address))
+    const revokeTx = await identities.connect(admin).revokeIdentity(user.address);
+    const revokeProposalId = await getProposalId(revokeTx, approvalRegistry);
+    await identities.connect(coSigner2).approveRevokeIdentity(revokeProposalId);
+
+    // Proposing the reclaim alone doesn't move it yet.
+    const reclaimTx = await assets.connect(admin).reclaimAsset(0, user2.address);
+    const reclaimProposalId = await getProposalId(reclaimTx, approvalRegistry);
+    expect(await assets.ownerOf(0)).to.equal(user.address);
+
+    await expect(assets.connect(coSigner2).approveReclaimAsset(reclaimProposalId))
       .to.emit(assets, "AssetReclaimed")
       .withArgs(0, user.address, user2.address);
 
@@ -189,12 +256,15 @@ describe("Platform core flow", function () {
     expect(history[1].timestamp).to.be.greaterThanOrEqual(compliance.revokedAt);
   });
 
-  it("refuses reclaimAsset while the current owner's identity is still active", async function () {
+  it("refuses to even propose reclaimAsset while the current owner's identity is still active", async function () {
     const { admin, manager, user, user2, assets } = await deployPlatform();
 
     await assets.connect(manager).mintAsset(user.address, "ipfs://asset-1");
 
-    // user's identity was never revoked - reclaim must not act as a general force-transfer.
+    // user's identity was never revoked - reclaim must not act as a general
+    // force-transfer. Checked at propose time (fail fast) as well as at
+    // approve/execute time, so a doomed proposal never gets created for
+    // co-signers to waste an approval on.
     await expect(assets.connect(admin).reclaimAsset(0, user2.address))
       .to.be.revertedWith("Current owner identity still active");
 
@@ -223,7 +293,7 @@ describe("Platform core flow", function () {
   });
 
   it("blocks minting, transferring, and reclaiming while paused - even for admin/manager - and restores them after unpause", async function () {
-    const { admin, manager, user, user2, outsider, identities, assets } = await deployPlatform();
+    const { admin, coSigner2, manager, user, user2, outsider, identities, assets, approvalRegistry } = await deployPlatform();
 
     // A third identity, revoked below, so the reclaim precondition (owner
     // revoked) is set up without disturbing user2 - the transfer check later
@@ -237,7 +307,10 @@ describe("Platform core flow", function () {
 
     await assets.connect(manager).mintAsset(user.address, "ipfs://asset-1"); // token 0: user, stays active
     await assets.connect(manager).mintAsset(outsider.address, "ipfs://asset-2"); // token 1: outsider, about to be revoked
-    await identities.connect(admin).revokeIdentity(outsider.address);
+
+    const revokeTx = await identities.connect(admin).revokeIdentity(outsider.address);
+    const revokeProposalId = await getProposalId(revokeTx, approvalRegistry);
+    await identities.connect(coSigner2).approveRevokeIdentity(revokeProposalId);
 
     await assets.connect(admin).pause();
 
@@ -249,8 +322,7 @@ describe("Platform core flow", function () {
     await expect(assets.connect(user).transferAsset(user2.address, 0))
       .to.be.revertedWithCustomError(assets, "EnforcedPause");
 
-    // Admin, who is otherwise authorized to reclaim a revoked owner's asset, is
-    // blocked by the pause itself.
+    // A co-signer proposing an otherwise-valid reclaim is blocked by the pause itself.
     await expect(assets.connect(admin).reclaimAsset(1, user.address))
       .to.be.revertedWithCustomError(assets, "EnforcedPause");
 
@@ -265,10 +337,69 @@ describe("Platform core flow", function () {
       .to.emit(assets, "AssetMinted");
     await expect(assets.connect(user).transferAsset(user2.address, 0))
       .to.emit(assets, "AssetTransferred");
-    await expect(assets.connect(admin).reclaimAsset(1, user.address))
+
+    const reclaimTx = await assets.connect(admin).reclaimAsset(1, user.address);
+    const reclaimProposalId = await getProposalId(reclaimTx, approvalRegistry);
+    await expect(assets.connect(coSigner2).approveReclaimAsset(reclaimProposalId))
       .to.emit(assets, "AssetReclaimed");
 
     expect(await assets.ownerOf(0)).to.equal(user2.address);
     expect(await assets.ownerOf(1)).to.equal(user.address);
+  });
+
+  it("does not execute a proposal on a single co-signer's call, and rejects the proposer approving their own proposal again", async function () {
+    const { admin, coSigner2, coSigner3, user, identities, approvalRegistry } = await deployPlatform();
+
+    const tx = await identities.connect(admin).revokeIdentity(user.address);
+    const proposalId = await getProposalId(tx, approvalRegistry);
+
+    // The proposer's call counts as the first approval, but that alone
+    // doesn't execute anything yet.
+    expect((await identities.getIdentity(user.address)).active).to.equal(true);
+    let proposal = await approvalRegistry.getProposal(proposalId);
+    expect(proposal.approvalCount).to.equal(1);
+    expect(proposal.executed).to.equal(false);
+
+    // The same co-signer (the proposer) approving their own proposal again
+    // does not count as a second approval.
+    await expect(identities.connect(admin).approveRevokeIdentity(proposalId))
+      .to.be.revertedWith("Already approved");
+    proposal = await approvalRegistry.getProposal(proposalId);
+    expect(proposal.approvalCount).to.equal(1);
+    expect((await identities.getIdentity(user.address)).active).to.equal(true);
+
+    // A second, DIFFERENT co-signer's approval executes it.
+    await expect(identities.connect(coSigner2).approveRevokeIdentity(proposalId))
+      .to.emit(identities, "IdentityRevoked")
+      .withArgs(user.address);
+    expect((await identities.getIdentity(user.address)).active).to.equal(false);
+
+    // Approving an already-executed proposal is rejected too.
+    await expect(identities.connect(coSigner3).approveRevokeIdentity(proposalId))
+      .to.be.revertedWith("Already executed");
+  });
+
+  it("does not let a non-co-signer propose or approve - even one who separately holds ADMIN_ROLE", async function () {
+    const { admin, manager, outsider, user, roles, ADMIN_ROLE, identities, approvalRegistry } = await deployPlatform();
+
+    await expect(identities.connect(manager).revokeIdentity(user.address))
+      .to.be.revertedWith("Not a co-signer");
+
+    // Being ADMIN_ROLE alone still isn't enough - co-signer status is
+    // deliberately independent, per RoleRegistry's CO_SIGNER_ROLE design.
+    await roles.assignRole(ADMIN_ROLE, outsider.address);
+    await expect(identities.connect(outsider).revokeIdentity(user.address))
+      .to.be.revertedWith("Not a co-signer");
+
+    const tx = await identities.connect(admin).revokeIdentity(user.address);
+    const proposalId = await getProposalId(tx, approvalRegistry);
+
+    await expect(identities.connect(manager).approveRevokeIdentity(proposalId))
+      .to.be.revertedWith("Not a co-signer");
+    await expect(identities.connect(outsider).approveRevokeIdentity(proposalId))
+      .to.be.revertedWith("Not a co-signer");
+
+    // Still not executed.
+    expect((await identities.getIdentity(user.address)).active).to.equal(true);
   });
 });

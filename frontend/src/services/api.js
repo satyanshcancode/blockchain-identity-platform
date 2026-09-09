@@ -18,3 +18,4 @@ export const getAssetHistory = (tokenId) => request(`/api/assets/${tokenId}/hist
 export const getAuditLog = () => request("/api/audit");
 export const getIdentity = (address) => request(`/api/identity/${address}`);
 export const getComplianceRecord = (address) => request(`/api/identity/${address}/compliance`);
+export const getPendingApprovals = () => request("/api/approvals/pending");

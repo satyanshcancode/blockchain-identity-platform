@@ -10,6 +10,11 @@ contract RoleRegistry is AccessControl {
     bytes32 public constant MANAGER_ROLE = keccak256("MANAGER_ROLE");
     bytes32 public constant AUDITOR_ROLE = keccak256("AUDITOR_ROLE");
     bytes32 public constant USER_ROLE = keccak256("USER_ROLE");
+    // Designated co-signers for the 2-of-N multi-sig approval flow on
+    // high-risk actions (see ApprovalRegistry.sol). Deliberately separate
+    // from ADMIN_ROLE: an address can hold ADMIN_ROLE for day-to-day admin
+    // work without being one of the designated co-signers, and vice versa.
+    bytes32 public constant CO_SIGNER_ROLE = keccak256("CO_SIGNER_ROLE");
 
     constructor(address rootAdmin) {
         _grantRole(DEFAULT_ADMIN_ROLE, rootAdmin);

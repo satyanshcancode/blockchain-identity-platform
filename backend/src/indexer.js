@@ -23,6 +23,11 @@ const assetAbi = [
   "event PlatformPaused(address indexed admin)",
   "event PlatformUnpaused(address indexed admin)"
 ];
+const approvalAbi = [
+  "event ActionProposed(uint256 indexed proposalId, address indexed targetContract, uint8 actionType, address indexed proposer, bytes data)",
+  "event ActionApproved(uint256 indexed proposalId, address indexed approver, uint256 approvalCount)",
+  "event ActionExecuted(uint256 indexed proposalId)"
+];
 
 function record(type, fields, log) {
   insertEvent({
@@ -35,7 +40,7 @@ function record(type, fields, log) {
   });
 }
 
-function attachListeners(identityContract, assetContract) {
+function attachListeners(identityContract, assetContract, approvalContract) {
   identityContract.on("IdentityRegistered", (account, did, uri, event) => {
     record("IdentityRegistered", { account, payload: { did, uri } }, event.log);
     persistNow();
@@ -71,6 +76,39 @@ function attachListeners(identityContract, assetContract) {
     persistNow();
     console.log("Platform unpaused by:", admin);
   });
+
+  approvalContract.on("ActionProposed", (proposalId, targetContract, actionType, proposer, data, event) => {
+    record(
+      "ActionProposed",
+      // actionType is a uint8 enum - ethers returns it as a BigInt, which
+      // JSON.stringify (used when persisting payload below) cannot serialize
+      // ("Do not know how to serialize a BigInt"). That throw happened
+      // inside this listener callback, and ethers' own dispatch loop
+      // silently swallows exceptions thrown by event listeners - no crash,
+      // no log, the event just never got recorded. Number() here converts
+      // it up front so this listener can't hit that silently-dropped path.
+      { tokenId: proposalId.toString(), account: proposer, payload: { targetContract, actionType: Number(actionType), data } },
+      event.log
+    );
+    persistNow();
+    console.log("Action proposed:", proposalId.toString(), "by", proposer);
+  });
+
+  approvalContract.on("ActionApproved", (proposalId, approver, approvalCount, event) => {
+    record(
+      "ActionApproved",
+      { tokenId: proposalId.toString(), account: approver, payload: { approvalCount: approvalCount.toString() } },
+      event.log
+    );
+    persistNow();
+    console.log("Action approved:", proposalId.toString(), "by", approver, `(${approvalCount}/2)`);
+  });
+
+  approvalContract.on("ActionExecuted", (proposalId, event) => {
+    record("ActionExecuted", { tokenId: proposalId.toString() }, event.log);
+    persistNow();
+    console.log("Action executed:", proposalId.toString());
+  });
 }
 
 // Fetches every log for one event in [fromBlock, toBlock] and writes it to
@@ -90,12 +128,13 @@ async function start() {
 
   const identityContract = new ethers.Contract(process.env.IDENTITY_REGISTRY_ADDRESS, identityAbi, provider);
   const assetContract = new ethers.Contract(process.env.ASSET_NFT_ADDRESS, assetAbi, provider);
+  const approvalContract = new ethers.Contract(process.env.APPROVAL_REGISTRY_ADDRESS, approvalAbi, provider);
 
   // Subscribe before scanning history, so an event emitted mid-scan can't
   // fall through the gap between "scan finished" and "subscribed live" - at
   // worst it's seen by both and the unique constraint in db.js drops the
   // duplicate insert.
-  attachListeners(identityContract, assetContract);
+  attachListeners(identityContract, assetContract, approvalContract);
 
   let lastProcessed = getLastProcessedBlock();
 
@@ -149,6 +188,21 @@ async function start() {
     }));
     caught += await catchUpEvent(assetContract, "PlatformUnpaused", fromBlock, currentBlock, (args) => ({
       account: args.admin
+    }));
+    caught += await catchUpEvent(approvalContract, "ActionProposed", fromBlock, currentBlock, (args) => ({
+      tokenId: args.proposalId.toString(),
+      account: args.proposer,
+      // See the live listener's identical Number(actionType) note above -
+      // args.actionType is a BigInt here too.
+      payload: { targetContract: args.targetContract, actionType: Number(args.actionType), data: args.data }
+    }));
+    caught += await catchUpEvent(approvalContract, "ActionApproved", fromBlock, currentBlock, (args) => ({
+      tokenId: args.proposalId.toString(),
+      account: args.approver,
+      payload: { approvalCount: args.approvalCount.toString() }
+    }));
+    caught += await catchUpEvent(approvalContract, "ActionExecuted", fromBlock, currentBlock, (args) => ({
+      tokenId: args.proposalId.toString()
     }));
     console.log(`Indexer: caught up, replayed ${caught} event(s) from downtime.`);
   }

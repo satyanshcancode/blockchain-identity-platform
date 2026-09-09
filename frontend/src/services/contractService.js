@@ -7,6 +7,7 @@
 import { BrowserProvider, Contract } from "ethers";
 
 export const ROLE_REGISTRY_ADDRESS = process.env.REACT_APP_ROLE_REGISTRY_ADDRESS || "";
+export const APPROVAL_REGISTRY_ADDRESS = process.env.REACT_APP_APPROVAL_REGISTRY_ADDRESS || "";
 export const IDENTITY_REGISTRY_ADDRESS = process.env.REACT_APP_IDENTITY_REGISTRY_ADDRESS || "";
 export const ASSET_NFT_ADDRESS = process.env.REACT_APP_ASSET_NFT_ADDRESS || "";
 
@@ -15,8 +16,11 @@ const ROLE_REGISTRY_ABI = [
   "function MANAGER_ROLE() view returns (bytes32)",
   "function AUDITOR_ROLE() view returns (bytes32)",
   "function USER_ROLE() view returns (bytes32)",
+  "function CO_SIGNER_ROLE() view returns (bytes32)",
   "function hasRole(bytes32 role, address account) view returns (bool)"
 ];
+
+const APPROVAL_REGISTRY_ABI = ["function hasApproved(uint256 proposalId, address account) view returns (bool)"];
 
 const IDENTITY_REGISTRY_ABI = [
   "function getIdentity(address account) view returns (tuple(string did,string metadataURI,bool active))",
@@ -24,13 +28,15 @@ const IDENTITY_REGISTRY_ABI = [
   "function eip712Domain() view returns (bytes1 fields, string name, string version, uint256 chainId, address verifyingContract, bytes32 salt, uint256[] extensions)",
   "function registerIdentity(address account, string did, string metadataURI, bytes signature)",
   "function updateMetadata(string newMetadataURI)",
-  "function revokeIdentity(address account)"
+  "function revokeIdentity(address account) returns (uint256 proposalId)",
+  "function approveRevokeIdentity(uint256 proposalId)"
 ];
 
 const ASSET_NFT_ABI = [
   "function mintAsset(address to, string uri) returns (uint256)",
   "function transferAsset(address to, uint256 tokenId)",
-  "function reclaimAsset(uint256 tokenId, address newOwner)",
+  "function reclaimAsset(uint256 tokenId, address newOwner) returns (uint256 proposalId)",
+  "function approveReclaimAsset(uint256 proposalId)",
   "function pause()",
   "function unpause()",
   "function paused() view returns (bool)",
@@ -60,23 +66,37 @@ export function getAssetNFT(signerOrProvider) {
   return new Contract(ASSET_NFT_ADDRESS, ASSET_NFT_ABI, signerOrProvider);
 }
 
-// The four roles are on-chain keccak256 constants (see RoleRegistry.sol) -
+export function getApprovalRegistry(signerOrProvider) {
+  return new Contract(APPROVAL_REGISTRY_ADDRESS, APPROVAL_REGISTRY_ABI, signerOrProvider);
+}
+
+// The five roles are on-chain keccak256 constants (see RoleRegistry.sol) -
 // read them from the contract rather than hardcoding the hash client-side,
 // so this can't silently drift if the contract ever changes them.
 export async function getRolesForAddress(roleRegistry, address) {
-  const [ADMIN_ROLE, MANAGER_ROLE, AUDITOR_ROLE, USER_ROLE] = await Promise.all([
+  const [ADMIN_ROLE, MANAGER_ROLE, AUDITOR_ROLE, USER_ROLE, CO_SIGNER_ROLE] = await Promise.all([
     roleRegistry.ADMIN_ROLE(),
     roleRegistry.MANAGER_ROLE(),
     roleRegistry.AUDITOR_ROLE(),
-    roleRegistry.USER_ROLE()
+    roleRegistry.USER_ROLE(),
+    roleRegistry.CO_SIGNER_ROLE()
   ]);
-  const [isAdmin, isManager, isAuditor, isUser] = await Promise.all([
+  const [isAdmin, isManager, isAuditor, isUser, isCoSigner] = await Promise.all([
     roleRegistry.hasRole(ADMIN_ROLE, address),
     roleRegistry.hasRole(MANAGER_ROLE, address),
     roleRegistry.hasRole(AUDITOR_ROLE, address),
-    roleRegistry.hasRole(USER_ROLE, address)
+    roleRegistry.hasRole(USER_ROLE, address),
+    roleRegistry.hasRole(CO_SIGNER_ROLE, address)
   ]);
-  return { isAdmin, isManager, isAuditor, isUser };
+  return { isAdmin, isManager, isAuditor, isUser, isCoSigner };
+}
+
+// Live on-chain read via the connected wallet, not the backend - same
+// exception the architecture makes for role checks and getPaused(): it's
+// UI-gating state ("has this specific connected address already approved
+// this proposal, so hide the button"), not an indexed audit record.
+export async function hasApproved(signerOrProvider, proposalId, address) {
+  return getApprovalRegistry(signerOrProvider).hasApproved(proposalId, address);
 }
 
 // Produces the EIP-712 signature (and ready-to-submit calldata) an admin
@@ -177,15 +197,35 @@ export async function registerIdentity(signer, account, did, metadataURI, signat
   return tx.wait();
 }
 
+// High-risk, 2-of-N co-signer gated (see ApprovalRegistry.sol / RoleRegistry's
+// CO_SIGNER_ROLE) - this call only PROPOSES a revocation, it does not revoke
+// anything by itself. A second, different co-signer must call
+// approveRevokeIdentity() with the resulting proposal id (see the Pending
+// Approvals list, fed by GET /api/approvals/pending) before it takes effect.
 export async function revokeIdentity(signer, account) {
   const tx = await getIdentityRegistry(signer).revokeIdentity(account);
   return tx.wait();
 }
 
+export async function approveRevokeIdentity(signer, proposalId) {
+  const tx = await getIdentityRegistry(signer).approveRevokeIdentity(proposalId);
+  return tx.wait();
+}
+
+// High-risk, 2-of-N co-signer gated - like revokeIdentity(), this only
+// proposes a reclaim (see approveReclaimAsset() for the second step).
 export async function reclaimAsset(signer, tokenId, newOwner) {
   const contract = getAssetNFT(signer);
   return withFriendlyPauseErrors(contract, async () => {
     const tx = await contract.reclaimAsset(tokenId, newOwner);
+    return tx.wait();
+  });
+}
+
+export async function approveReclaimAsset(signer, proposalId) {
+  const contract = getAssetNFT(signer);
+  return withFriendlyPauseErrors(contract, async () => {
+    const tx = await contract.approveReclaimAsset(proposalId);
     return tx.wait();
   });
 }

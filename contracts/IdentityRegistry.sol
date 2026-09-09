@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "./RoleRegistry.sol";
+import "./ApprovalRegistry.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
@@ -9,6 +10,7 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 /// @notice Anchors a DID + metadata pointer (IPFS) for each on-chain identity.
 contract IdentityRegistry is EIP712 {
     RoleRegistry public roleRegistry;
+    ApprovalRegistry public approvalRegistry;
 
     // EIP-712 typehash for the consent signature the account being registered
     // must produce off-chain (see scripts/signRegistration.js) so an admin can't
@@ -61,8 +63,14 @@ contract IdentityRegistry is EIP712 {
         _;
     }
 
-    constructor(address _roleRegistry) EIP712("IdentityRegistry", "1") {
+    modifier onlyCoSigner() {
+        require(roleRegistry.hasRole(roleRegistry.CO_SIGNER_ROLE(), msg.sender), "Not a co-signer");
+        _;
+    }
+
+    constructor(address _roleRegistry, address _approvalRegistry) EIP712("IdentityRegistry", "1") {
         roleRegistry = RoleRegistry(_roleRegistry);
+        approvalRegistry = ApprovalRegistry(_approvalRegistry);
     }
 
     /// @notice Admin submits the registration, but it only succeeds if `account`
@@ -98,7 +106,27 @@ contract IdentityRegistry is EIP712 {
         emit IdentityRegistered(account, did, metadataURI);
     }
 
-    function revokeIdentity(address account) external onlyAdmin {
+    /// @notice High-risk action, gated by 2-of-N multi-sig instead of plain
+    /// onlyAdmin (see ApprovalRegistry.sol): this call only creates a pending
+    /// proposal - it does NOT revoke anything yet. A second, different
+    /// co-signer must call approveRevokeIdentity() with the returned proposal
+    /// id for the revocation to actually take effect.
+    function revokeIdentity(address account) external onlyCoSigner returns (uint256 proposalId) {
+        require(identities[account].active, "Identity not active");
+        return approvalRegistry.propose(msg.sender, ApprovalRegistry.ActionType.RevokeIdentity, abi.encode(account));
+    }
+
+    /// @notice Second co-signer's approval. Executes the revocation in the
+    /// same transaction the moment this crosses ApprovalRegistry's
+    /// REQUIRED_APPROVALS threshold - re-checks the identity is still active,
+    /// since time may have passed since revokeIdentity() was first called.
+    function approveRevokeIdentity(uint256 proposalId) external onlyCoSigner {
+        (bool nowExecuted, bytes memory data) = approvalRegistry.approve(msg.sender, proposalId);
+        if (!nowExecuted) return;
+
+        address account = abi.decode(data, (address));
+        require(identities[account].active, "Identity not active");
+
         identities[account].active = false;
         complianceRecords[account].revokedAt = block.timestamp;
         complianceRecords[account].revocationCount += 1;

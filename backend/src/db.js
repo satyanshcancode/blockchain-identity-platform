@@ -99,6 +99,24 @@ function rowToEntry(row) {
     case "PlatformPaused":
     case "PlatformUnpaused":
       return { ...base, admin: row.account };
+    case "ActionProposed":
+      return {
+        ...base,
+        proposalId: row.token_id,
+        proposer: row.account,
+        targetContract: payload.targetContract,
+        actionType: payload.actionType,
+        data: payload.data
+      };
+    case "ActionApproved":
+      return {
+        ...base,
+        proposalId: row.token_id,
+        approver: row.account,
+        approvalCount: payload.approvalCount
+      };
+    case "ActionExecuted":
+      return { ...base, proposalId: row.token_id };
     default:
       return { ...base, ...payload };
   }

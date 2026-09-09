@@ -1,14 +1,24 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useWallet } from "../context/WalletContext";
-import { getAuditLog, getAssetHistory, getComplianceRecord } from "../services/api";
-import { registerIdentity, revokeIdentity, reclaimAsset, pausePlatform, unpausePlatform, getPaused } from "../services/contractService";
+import { getAuditLog, getAssetHistory, getComplianceRecord, getPendingApprovals } from "../services/api";
+import {
+  registerIdentity,
+  revokeIdentity,
+  reclaimAsset,
+  approveRevokeIdentity,
+  approveReclaimAsset,
+  hasApproved,
+  pausePlatform,
+  unpausePlatform,
+  getPaused
+} from "../services/contractService";
 
 // Rendered only if the connected wallet has ADMIN_ROLE or AUDITOR_ROLE - see
 // App.jsx, which doesn't mount this component at all otherwise. The guard
 // below is a defensive backstop in case that ever changes, not the primary
 // gate: per the spec this panel must be hidden entirely, not just disabled.
 export default function AdminAuditPanel() {
-  const { signer, roles } = useWallet();
+  const { address, signer, roles } = useWallet();
 
   const [auditLog, setAuditLog] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
@@ -25,6 +35,12 @@ export default function AdminAuditPanel() {
   const [paused, setPausedState] = useState(null);
   const [pauseBusy, setPauseBusy] = useState(false);
   const [pauseStatus, setPauseStatus] = useState(null);
+
+  const [pendingApprovals, setPendingApprovals] = useState([]);
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const [approvedByMe, setApprovedByMe] = useState(new Set());
+  const [approveBusyId, setApproveBusyId] = useState(null);
+  const [approveStatus, setApproveStatus] = useState(null);
 
   const [regAccount, setRegAccount] = useState("");
   const [regDid, setRegDid] = useState("");
@@ -63,10 +79,35 @@ export default function AdminAuditPanel() {
     }
   }, [roles.isAdmin, signer]);
 
+  // Which pending proposals the CONNECTED wallet has already approved - the
+  // backend's list doesn't include this (it's per-viewer, not indexed audit
+  // data), so it's fetched live via the same on-chain-read-through-the-
+  // connected-wallet exception role checks and getPaused() already use. Only
+  // bothers making those calls for a co-signer, since only a co-signer could
+  // ever see the Approve button anyway.
+  const loadPendingApprovals = useCallback(async () => {
+    setPendingLoading(true);
+    try {
+      const list = await getPendingApprovals();
+      setPendingApprovals(list);
+      if (roles.isCoSigner && address) {
+        const flags = await Promise.all(list.map((p) => hasApproved(signer, p.proposalId, address)));
+        setApprovedByMe(new Set(list.filter((_, i) => flags[i]).map((p) => p.proposalId)));
+      } else {
+        setApprovedByMe(new Set());
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPendingLoading(false);
+    }
+  }, [roles.isCoSigner, address, signer]);
+
   useEffect(() => {
     loadAuditLog();
     loadPaused();
-  }, [loadPaused]);
+    loadPendingApprovals();
+  }, [loadPaused, loadPendingApprovals]);
 
   if (!roles.isAdmin && !roles.isAuditor) return null;
 
@@ -123,9 +164,12 @@ export default function AdminAuditPanel() {
     setError(null);
     try {
       await revokeIdentity(signer, revokeAddress);
-      setRevokeStatus(`Identity ${revokeAddress} revoked.`);
+      setRevokeStatus(
+        `Proposed revoking ${revokeAddress} - needs one more co-signer's approval below before it takes effect.`
+      );
       setRevokeAddress("");
       await loadAuditLog();
+      await loadPendingApprovals();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -140,14 +184,37 @@ export default function AdminAuditPanel() {
     setError(null);
     try {
       await reclaimAsset(signer, reclaimTokenId, reclaimNewOwner);
-      setReclaimStatus(`Asset #${reclaimTokenId} reclaimed to ${reclaimNewOwner}.`);
+      setReclaimStatus(
+        `Proposed reclaiming #${reclaimTokenId} to ${reclaimNewOwner} - needs one more co-signer's approval below before it takes effect.`
+      );
       setReclaimTokenId("");
       setReclaimNewOwner("");
       await loadAuditLog();
+      await loadPendingApprovals();
     } catch (err) {
       setError(err.message);
     } finally {
       setReclaimBusy(false);
+    }
+  };
+
+  const handleApprove = async (proposal) => {
+    setApproveBusyId(proposal.proposalId);
+    setApproveStatus(null);
+    setError(null);
+    try {
+      if (proposal.actionType === "RevokeIdentity") {
+        await approveRevokeIdentity(signer, proposal.proposalId);
+      } else {
+        await approveReclaimAsset(signer, proposal.proposalId);
+      }
+      setApproveStatus(`Approved proposal #${proposal.proposalId}.`);
+      await loadPendingApprovals();
+      await loadAuditLog();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setApproveBusyId(null);
     }
   };
 
@@ -258,67 +325,124 @@ export default function AdminAuditPanel() {
         )}
       </section>
 
+      <section style={section}>
+        <h3>Pending approvals</h3>
+        <p style={styles.hint}>
+          revokeIdentity and reclaimAsset require 2-of-N co-signer approval (see RoleRegistry's
+          CO_SIGNER_ROLE) - proposing one below only creates a proposal here. A different
+          co-signer (not the proposer) must approve it before it takes effect.
+        </p>
+        <button onClick={loadPendingApprovals} disabled={pendingLoading}>
+          {pendingLoading ? "Loading..." : "Refresh"}
+        </button>
+        {pendingApprovals.length === 0 ? (
+          <p>No pending proposals.</p>
+        ) : (
+          <ul>
+            {pendingApprovals.map((p) => {
+              const isProposer = address && p.proposer.toLowerCase() === address.toLowerCase();
+              const alreadyApproved = approvedByMe.has(p.proposalId);
+              const canApprove = roles.isCoSigner && !isProposer && !alreadyApproved;
+              return (
+                <li key={p.proposalId} style={{ marginBottom: 12 }}>
+                  <div>
+                    <strong>#{p.proposalId} {p.actionType}</strong>
+                    {p.actionType === "RevokeIdentity" && <span> — revoke {p.account}</span>}
+                    {p.actionType === "ReclaimAsset" && (
+                      <span> — reclaim #{p.tokenId} to {p.newOwner}</span>
+                    )}
+                  </div>
+                  <div style={styles.small}>
+                    Proposed by {p.proposer} at {new Date(Number(p.proposedAt) * 1000).toLocaleString()}
+                    {" — "}
+                    {p.approvalCount}/{p.requiredApprovals} approvals
+                    {isProposer && " (you proposed this)"}
+                    {!isProposer && alreadyApproved && " (you already approved)"}
+                  </div>
+                  {canApprove && (
+                    <button onClick={() => handleApprove(p)} disabled={approveBusyId === p.proposalId}>
+                      {approveBusyId === p.proposalId ? "Approving..." : "Approve"}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {approveStatus && <p>{approveStatus}</p>}
+      </section>
+
       {roles.isAdmin && (
+        <section style={section}>
+          <h3>Register identity</h3>
+          <p style={styles.hint}>
+            Submits a registration signed by someone else - paste the signature (and the
+            exact account/DID/metadata URI it was signed for) from the Identity tab's
+            "Generate signature" flow on *their* wallet, or from scripts/signRegistration.js.
+            The signature must match these fields exactly or the on-chain check rejects it.
+          </p>
+          <form onSubmit={handleRegister}>
+            <div>
+              <label>
+                Account:{" "}
+                <input value={regAccount} onChange={(e) => setRegAccount(e.target.value)} placeholder="0x..." required />
+              </label>
+            </div>
+            <div>
+              <label>
+                DID:{" "}
+                <input value={regDid} onChange={(e) => setRegDid(e.target.value)} placeholder="did:ethr:0x..." required />
+              </label>
+            </div>
+            <div>
+              <label>
+                Metadata URI:{" "}
+                <input value={regUri} onChange={(e) => setRegUri(e.target.value)} placeholder="ipfs://..." required />
+              </label>
+            </div>
+            <div>
+              <label>
+                Signature:{" "}
+                <textarea
+                  value={regSignature}
+                  onChange={(e) => setRegSignature(e.target.value)}
+                  placeholder="0x..."
+                  rows={2}
+                  style={styles.textarea}
+                  required
+                />
+              </label>
+            </div>
+            <button type="submit" disabled={regBusy}>{regBusy ? "Registering..." : "Register"}</button>
+          </form>
+          {regStatus && <p>{regStatus}</p>}
+        </section>
+      )}
+
+      {roles.isCoSigner && (
         <>
           <section style={section}>
-            <h3>Register identity</h3>
+            <h3>Propose: revoke identity</h3>
             <p style={styles.hint}>
-              Submits a registration signed by someone else - paste the signature (and the
-              exact account/DID/metadata URI it was signed for) from the Identity tab's
-              "Generate signature" flow on *their* wallet, or from scripts/signRegistration.js.
-              The signature must match these fields exactly or the on-chain check rejects it.
+              Requires a second, different co-signer's approval below before this takes effect
+              - see "Pending approvals" above.
             </p>
-            <form onSubmit={handleRegister}>
-              <div>
-                <label>
-                  Account:{" "}
-                  <input value={regAccount} onChange={(e) => setRegAccount(e.target.value)} placeholder="0x..." required />
-                </label>
-              </div>
-              <div>
-                <label>
-                  DID:{" "}
-                  <input value={regDid} onChange={(e) => setRegDid(e.target.value)} placeholder="did:ethr:0x..." required />
-                </label>
-              </div>
-              <div>
-                <label>
-                  Metadata URI:{" "}
-                  <input value={regUri} onChange={(e) => setRegUri(e.target.value)} placeholder="ipfs://..." required />
-                </label>
-              </div>
-              <div>
-                <label>
-                  Signature:{" "}
-                  <textarea
-                    value={regSignature}
-                    onChange={(e) => setRegSignature(e.target.value)}
-                    placeholder="0x..."
-                    rows={2}
-                    style={styles.textarea}
-                    required
-                  />
-                </label>
-              </div>
-              <button type="submit" disabled={regBusy}>{regBusy ? "Registering..." : "Register"}</button>
-            </form>
-            {regStatus && <p>{regStatus}</p>}
-          </section>
-
-          <section style={section}>
-            <h3>Revoke identity</h3>
             <form onSubmit={handleRevoke}>
               <label>
                 Address:{" "}
                 <input value={revokeAddress} onChange={(e) => setRevokeAddress(e.target.value)} placeholder="0x..." required />
               </label>
-              <button type="submit" disabled={revokeBusy}>{revokeBusy ? "Revoking..." : "Revoke"}</button>
+              <button type="submit" disabled={revokeBusy}>{revokeBusy ? "Proposing..." : "Propose revoke"}</button>
             </form>
             {revokeStatus && <p>{revokeStatus}</p>}
           </section>
 
           <section style={section}>
-            <h3>Reclaim asset (revoked identity only)</h3>
+            <h3>Propose: reclaim asset (revoked identity only)</h3>
+            <p style={styles.hint}>
+              Requires a second, different co-signer's approval below before this takes effect
+              - see "Pending approvals" above.
+            </p>
             <form onSubmit={handleReclaim}>
               <label>
                 Token ID:{" "}
@@ -328,7 +452,7 @@ export default function AdminAuditPanel() {
                 New owner:{" "}
                 <input value={reclaimNewOwner} onChange={(e) => setReclaimNewOwner(e.target.value)} placeholder="0x..." required />
               </label>
-              <button type="submit" disabled={reclaimBusy}>{reclaimBusy ? "Reclaiming..." : "Reclaim"}</button>
+              <button type="submit" disabled={reclaimBusy}>{reclaimBusy ? "Proposing..." : "Propose reclaim"}</button>
             </form>
             {reclaimStatus && <p>{reclaimStatus}</p>}
           </section>
@@ -341,6 +465,8 @@ export default function AdminAuditPanel() {
 function formatTs(seconds) {
   return new Date(Number(seconds) * 1000).toLocaleString();
 }
+
+const ACTION_TYPE_NAMES = ["RevokeIdentity", "ReclaimAsset"];
 
 function describeEntry(entry) {
   switch (entry.type) {
@@ -356,6 +482,12 @@ function describeEntry(entry) {
       return `Paused by ${entry.admin}`;
     case "PlatformUnpaused":
       return `Unpaused by ${entry.admin}`;
+    case "ActionProposed":
+      return `#${entry.proposalId} ${ACTION_TYPE_NAMES[entry.actionType] ?? entry.actionType} proposed by ${entry.proposer}`;
+    case "ActionApproved":
+      return `#${entry.proposalId} approved by ${entry.approver} (${entry.approvalCount}/2)`;
+    case "ActionExecuted":
+      return `#${entry.proposalId} executed`;
     default:
       return JSON.stringify(entry);
   }
@@ -366,6 +498,7 @@ const section = { marginTop: 16, paddingTop: 16, borderTop: "1px solid #eee" };
 const styles = {
   error: { color: "#b00020" },
   hint: { fontSize: 13, color: "#555" },
+  small: { fontSize: 12, color: "#555" },
   scroll: { maxHeight: 240, overflowY: "auto" },
   table: { width: "100%", borderCollapse: "collapse" },
   th: { textAlign: "left", borderBottom: "1px solid #ccc", padding: "4px 8px", position: "sticky", top: 0, background: "#fff" },

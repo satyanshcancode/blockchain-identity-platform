@@ -17,6 +17,7 @@ async function main() {
   const identityRoutes = require("./routes/identity");
   const assetRoutes = require("./routes/assets");
   const auditRoutes = require("./routes/audit");
+  const approvalRoutes = require("./routes/approvals");
 
   const app = express();
   app.use(cors());
@@ -26,6 +27,7 @@ async function main() {
   app.use("/api/identity", identityRoutes);
   app.use("/api/assets", assetRoutes);
   app.use("/api/audit", auditRoutes);
+  app.use("/api/approvals", approvalRoutes);
 
   const port = process.env.PORT || 4000;
   app.listen(port, () => console.log(`API listening on port ${port}`));

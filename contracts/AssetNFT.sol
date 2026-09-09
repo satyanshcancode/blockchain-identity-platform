@@ -5,12 +5,14 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./RoleRegistry.sol";
 import "./IdentityRegistry.sol";
+import "./ApprovalRegistry.sol";
 
 /// @title AssetNFT
 /// @notice Each digital/physical asset is minted as an NFT tied to an active DID identity.
 contract AssetNFT is ERC721, Pausable {
     RoleRegistry public roleRegistry;
     IdentityRegistry public identityRegistry;
+    ApprovalRegistry public approvalRegistry;
     uint256 private _nextTokenId;
 
     mapping(uint256 => string) private _tokenURIs;
@@ -60,11 +62,17 @@ contract AssetNFT is ERC721, Pausable {
         _;
     }
 
-    constructor(address _roleRegistry, address _identityRegistry)
+    modifier onlyCoSigner() {
+        require(roleRegistry.hasRole(roleRegistry.CO_SIGNER_ROLE(), msg.sender), "Not a co-signer");
+        _;
+    }
+
+    constructor(address _roleRegistry, address _identityRegistry, address _approvalRegistry)
         ERC721("PlatformAsset", "PAST")
     {
         roleRegistry = RoleRegistry(_roleRegistry);
         identityRegistry = IdentityRegistry(_identityRegistry);
+        approvalRegistry = ApprovalRegistry(_approvalRegistry);
     }
 
     /// @notice Emergency circuit breaker: instantly blocks mintAsset/transferAsset/
@@ -116,14 +124,36 @@ contract AssetNFT is ERC721, Pausable {
         emit AssetTransferred(tokenId, msg.sender, to);
     }
 
-    /// @notice Revocation-recovery path, not a general admin override: lets an admin
-    /// move a token away from an identity that has already been revoked (i.e. its
-    /// IdentityRegistry entry is inactive) to another *active* identity. Reverts if
-    /// the current owner's identity is still active — an admin who wants to move an
-    /// active identity's asset has no path here, only through that identity's own
-    /// transferAsset(). Combined with getComplianceRecord(from).revokedAt, auditors
-    /// can tell a reclaim apart from a voluntary transfer in getTransferHistory().
-    function reclaimAsset(uint256 tokenId, address newOwner) external onlyAdmin whenNotPaused {
+    /// @notice Revocation-recovery path, not a general admin override: lets
+    /// co-signers move a token away from an identity that has already been
+    /// revoked (i.e. its IdentityRegistry entry is inactive) to another
+    /// *active* identity. High-risk, so - like revokeIdentity() - this is
+    /// gated by 2-of-N multi-sig (see ApprovalRegistry.sol) instead of plain
+    /// onlyAdmin: this call only creates a pending proposal after checking
+    /// preconditions now (fail fast rather than let co-signers approve a
+    /// proposal that was doomed from the start); approveReclaimAsset()
+    /// re-checks them at execution time, since the current owner's identity
+    /// status or the token's owner could change during the approval window.
+    function reclaimAsset(uint256 tokenId, address newOwner) external onlyCoSigner whenNotPaused returns (uint256 proposalId) {
+        address currentOwner = ownerOf(tokenId);
+        require(!identityRegistry.getIdentity(currentOwner).active, "Current owner identity still active");
+        require(identityRegistry.getIdentity(newOwner).active, "New owner has no active identity");
+
+        return approvalRegistry.propose(
+            msg.sender,
+            ApprovalRegistry.ActionType.ReclaimAsset,
+            abi.encode(tokenId, newOwner)
+        );
+    }
+
+    /// @notice Second co-signer's approval. Executes the reclaim in the same
+    /// transaction the moment this crosses ApprovalRegistry's
+    /// REQUIRED_APPROVALS threshold.
+    function approveReclaimAsset(uint256 proposalId) external onlyCoSigner whenNotPaused {
+        (bool nowExecuted, bytes memory data) = approvalRegistry.approve(msg.sender, proposalId);
+        if (!nowExecuted) return;
+
+        (uint256 tokenId, address newOwner) = abi.decode(data, (uint256, address));
         address currentOwner = ownerOf(tokenId);
         require(!identityRegistry.getIdentity(currentOwner).active, "Current owner identity still active");
         require(identityRegistry.getIdentity(newOwner).active, "New owner has no active identity");
