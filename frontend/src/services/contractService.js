@@ -30,7 +30,12 @@ const IDENTITY_REGISTRY_ABI = [
 const ASSET_NFT_ABI = [
   "function mintAsset(address to, string uri) returns (uint256)",
   "function transferAsset(address to, uint256 tokenId)",
-  "function reclaimAsset(uint256 tokenId, address newOwner)"
+  "function reclaimAsset(uint256 tokenId, address newOwner)",
+  "function pause()",
+  "function unpause()",
+  "function paused() view returns (bool)",
+  "error EnforcedPause()",
+  "error ExpectedPause()"
 ];
 
 export async function connectWallet() {
@@ -118,14 +123,49 @@ export async function updateMetadata(signer, newMetadataURI) {
   return tx.wait();
 }
 
+// EnforcedPause/ExpectedPause are declared in ASSET_NFT_ABI, but ethers v6
+// doesn't reliably auto-decode a custom error's name back out of a
+// CALL_EXCEPTION for every provider/call path (confirmed against Hardhat
+// Network: Interface.parseError() decodes the raw revert data correctly,
+// but the error ethers actually throws still says "unknown custom error").
+// Decode err.data ourselves as a fallback so a paused-platform revert always
+// surfaces a clear message instead of that opaque one.
+const PAUSE_ERROR_MESSAGES = {
+  EnforcedPause: "Platform is paused - minting, transfers, and reclaims are temporarily disabled.",
+  ExpectedPause: "Platform is not currently paused."
+};
+
+function withFriendlyPauseErrors(contract, fn) {
+  return fn().catch((err) => {
+    let parsed = null;
+    if (err.data) {
+      try {
+        parsed = contract.interface.parseError(err.data);
+      } catch {
+        // err.data wasn't a recognized custom error selector - fall through.
+      }
+    }
+    if (parsed && PAUSE_ERROR_MESSAGES[parsed.name]) {
+      throw new Error(PAUSE_ERROR_MESSAGES[parsed.name]);
+    }
+    throw err;
+  });
+}
+
 export async function mintAsset(signer, to, uri) {
-  const tx = await getAssetNFT(signer).mintAsset(to, uri);
-  return tx.wait();
+  const contract = getAssetNFT(signer);
+  return withFriendlyPauseErrors(contract, async () => {
+    const tx = await contract.mintAsset(to, uri);
+    return tx.wait();
+  });
 }
 
 export async function transferAsset(signer, to, tokenId) {
-  const tx = await getAssetNFT(signer).transferAsset(to, tokenId);
-  return tx.wait();
+  const contract = getAssetNFT(signer);
+  return withFriendlyPauseErrors(contract, async () => {
+    const tx = await contract.transferAsset(to, tokenId);
+    return tx.wait();
+  });
 }
 
 // Submits a registration an admin received from someone else (via
@@ -143,6 +183,34 @@ export async function revokeIdentity(signer, account) {
 }
 
 export async function reclaimAsset(signer, tokenId, newOwner) {
-  const tx = await getAssetNFT(signer).reclaimAsset(tokenId, newOwner);
-  return tx.wait();
+  const contract = getAssetNFT(signer);
+  return withFriendlyPauseErrors(contract, async () => {
+    const tx = await contract.reclaimAsset(tokenId, newOwner);
+    return tx.wait();
+  });
+}
+
+// Emergency circuit breaker: while paused, mintAsset/transferAsset/reclaimAsset
+// all revert EnforcedPause (see withFriendlyPauseErrors above). getPaused() is
+// a live on-chain read via the connected wallet, not the backend - same
+// exception the architecture already makes for role checks, since it's
+// UI-gating state tied to the connected signer, not an indexed audit record.
+export async function pausePlatform(signer) {
+  const contract = getAssetNFT(signer);
+  return withFriendlyPauseErrors(contract, async () => {
+    const tx = await contract.pause();
+    return tx.wait();
+  });
+}
+
+export async function unpausePlatform(signer) {
+  const contract = getAssetNFT(signer);
+  return withFriendlyPauseErrors(contract, async () => {
+    const tx = await contract.unpause();
+    return tx.wait();
+  });
+}
+
+export async function getPaused(signerOrProvider) {
+  return getAssetNFT(signerOrProvider).paused();
 }

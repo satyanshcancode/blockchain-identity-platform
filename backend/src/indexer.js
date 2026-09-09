@@ -19,7 +19,9 @@ const identityAbi = ["event IdentityRegistered(address indexed account, string d
 const assetAbi = [
   "event AssetMinted(uint256 indexed tokenId, address indexed owner, string uri)",
   "event AssetTransferred(uint256 indexed tokenId, address indexed from, address indexed to)",
-  "event AssetReclaimed(uint256 indexed tokenId, address indexed from, address indexed to)"
+  "event AssetReclaimed(uint256 indexed tokenId, address indexed from, address indexed to)",
+  "event PlatformPaused(address indexed admin)",
+  "event PlatformUnpaused(address indexed admin)"
 ];
 
 function record(type, fields, log) {
@@ -56,6 +58,18 @@ function attachListeners(identityContract, assetContract) {
     record("AssetReclaimed", { tokenId: tokenId.toString(), from, to }, event.log);
     persistNow();
     console.log("Asset reclaimed:", tokenId.toString(), from, "->", to);
+  });
+
+  assetContract.on("PlatformPaused", (admin, event) => {
+    record("PlatformPaused", { account: admin }, event.log);
+    persistNow();
+    console.log("Platform paused by:", admin);
+  });
+
+  assetContract.on("PlatformUnpaused", (admin, event) => {
+    record("PlatformUnpaused", { account: admin }, event.log);
+    persistNow();
+    console.log("Platform unpaused by:", admin);
   });
 }
 
@@ -129,6 +143,12 @@ async function start() {
       tokenId: args.tokenId.toString(),
       from: args.from,
       to: args.to
+    }));
+    caught += await catchUpEvent(assetContract, "PlatformPaused", fromBlock, currentBlock, (args) => ({
+      account: args.admin
+    }));
+    caught += await catchUpEvent(assetContract, "PlatformUnpaused", fromBlock, currentBlock, (args) => ({
+      account: args.admin
     }));
     console.log(`Indexer: caught up, replayed ${caught} event(s) from downtime.`);
   }

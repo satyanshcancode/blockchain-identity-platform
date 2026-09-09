@@ -200,4 +200,75 @@ describe("Platform core flow", function () {
 
     expect(await assets.ownerOf(0)).to.equal(user.address);
   });
+
+  it("lets only admin pause and unpause the platform, emitting PlatformPaused/PlatformUnpaused", async function () {
+    const { admin, manager, auditor, assets } = await deployPlatform();
+
+    await expect(assets.connect(manager).pause()).to.be.revertedWith("Not admin");
+    await expect(assets.connect(auditor).pause()).to.be.revertedWith("Not admin");
+    expect(await assets.paused()).to.equal(false);
+
+    await expect(assets.connect(admin).pause())
+      .to.emit(assets, "PlatformPaused")
+      .withArgs(admin.address);
+    expect(await assets.paused()).to.equal(true);
+
+    await expect(assets.connect(manager).unpause()).to.be.revertedWith("Not admin");
+    expect(await assets.paused()).to.equal(true);
+
+    await expect(assets.connect(admin).unpause())
+      .to.emit(assets, "PlatformUnpaused")
+      .withArgs(admin.address);
+    expect(await assets.paused()).to.equal(false);
+  });
+
+  it("blocks minting, transferring, and reclaiming while paused - even for admin/manager - and restores them after unpause", async function () {
+    const { admin, manager, user, user2, outsider, identities, assets } = await deployPlatform();
+
+    // A third identity, revoked below, so the reclaim precondition (owner
+    // revoked) is set up without disturbing user2 - the transfer check later
+    // needs user2 to still be a valid (active) recipient. No USER_ROLE
+    // needed: outsider only ever receives/holds a token here, never calls
+    // anything.
+    const outsiderSig = await signRegistration(
+      identities, outsider, outsider.address, "did:ethr:0xOutsider", "ipfs://outsider"
+    );
+    await identities.connect(admin).registerIdentity(outsider.address, "did:ethr:0xOutsider", "ipfs://outsider", outsiderSig);
+
+    await assets.connect(manager).mintAsset(user.address, "ipfs://asset-1"); // token 0: user, stays active
+    await assets.connect(manager).mintAsset(outsider.address, "ipfs://asset-2"); // token 1: outsider, about to be revoked
+    await identities.connect(admin).revokeIdentity(outsider.address);
+
+    await assets.connect(admin).pause();
+
+    // Manager, who is otherwise authorized to mint, is blocked by the pause itself.
+    await expect(assets.connect(manager).mintAsset(user.address, "ipfs://asset-3"))
+      .to.be.revertedWithCustomError(assets, "EnforcedPause");
+
+    // A user with a valid, ownable transfer is blocked by the pause itself.
+    await expect(assets.connect(user).transferAsset(user2.address, 0))
+      .to.be.revertedWithCustomError(assets, "EnforcedPause");
+
+    // Admin, who is otherwise authorized to reclaim a revoked owner's asset, is
+    // blocked by the pause itself.
+    await expect(assets.connect(admin).reclaimAsset(1, user.address))
+      .to.be.revertedWithCustomError(assets, "EnforcedPause");
+
+    // Nothing moved while paused.
+    expect(await assets.ownerOf(0)).to.equal(user.address);
+    expect(await assets.ownerOf(1)).to.equal(outsider.address);
+
+    await assets.connect(admin).unpause();
+
+    // The exact same operations now succeed normally.
+    await expect(assets.connect(manager).mintAsset(user.address, "ipfs://asset-3"))
+      .to.emit(assets, "AssetMinted");
+    await expect(assets.connect(user).transferAsset(user2.address, 0))
+      .to.emit(assets, "AssetTransferred");
+    await expect(assets.connect(admin).reclaimAsset(1, user.address))
+      .to.emit(assets, "AssetReclaimed");
+
+    expect(await assets.ownerOf(0)).to.equal(user2.address);
+    expect(await assets.ownerOf(1)).to.equal(user.address);
+  });
 });

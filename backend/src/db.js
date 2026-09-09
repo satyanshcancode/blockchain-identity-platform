@@ -96,6 +96,9 @@ function rowToEntry(row) {
     case "AssetTransferred":
     case "AssetReclaimed":
       return { ...base, tokenId: row.token_id, from: row.from_address, to: row.to_address };
+    case "PlatformPaused":
+    case "PlatformUnpaused":
+      return { ...base, admin: row.account };
     default:
       return { ...base, ...payload };
   }

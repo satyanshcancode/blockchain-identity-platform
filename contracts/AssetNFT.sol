@@ -2,12 +2,13 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./RoleRegistry.sol";
 import "./IdentityRegistry.sol";
 
 /// @title AssetNFT
 /// @notice Each digital/physical asset is minted as an NFT tied to an active DID identity.
-contract AssetNFT is ERC721 {
+contract AssetNFT is ERC721, Pausable {
     RoleRegistry public roleRegistry;
     IdentityRegistry public identityRegistry;
     uint256 private _nextTokenId;
@@ -28,6 +29,8 @@ contract AssetNFT is ERC721 {
     event AssetMinted(uint256 indexed tokenId, address indexed owner, string uri);
     event AssetTransferred(uint256 indexed tokenId, address indexed from, address indexed to);
     event AssetReclaimed(uint256 indexed tokenId, address indexed from, address indexed to);
+    event PlatformPaused(address indexed admin);
+    event PlatformUnpaused(address indexed admin);
 
     modifier onlyAdmin() {
         require(roleRegistry.hasRole(roleRegistry.ADMIN_ROLE(), msg.sender), "Not admin");
@@ -64,7 +67,22 @@ contract AssetNFT is ERC721 {
         identityRegistry = IdentityRegistry(_identityRegistry);
     }
 
-    function mintAsset(address to, string calldata uri) external onlyManagerOrAdmin returns (uint256) {
+    /// @notice Emergency circuit breaker: instantly blocks mintAsset/transferAsset/
+    /// reclaimAsset platform-wide (see the whenNotPaused modifier on each) until
+    /// unpause() is called. Pausable's own _pause()/_unpause() already revert
+    /// (EnforcedPause/ExpectedPause) if called when already in that state, so
+    /// there's no separate "already paused" check needed here.
+    function pause() external onlyAdmin {
+        _pause();
+        emit PlatformPaused(msg.sender);
+    }
+
+    function unpause() external onlyAdmin {
+        _unpause();
+        emit PlatformUnpaused(msg.sender);
+    }
+
+    function mintAsset(address to, string calldata uri) external onlyManagerOrAdmin whenNotPaused returns (uint256) {
         IdentityRegistry.Identity memory id = identityRegistry.getIdentity(to);
         require(id.active, "Recipient has no active identity");
 
@@ -87,7 +105,7 @@ contract AssetNFT is ERC721 {
     /// RBAC apply to asset movement, not just minting. The sender's own identity
     /// must also still be active — otherwise a revoked identity could keep moving
     /// assets it already holds; that path is reclaimAsset() instead.
-    function transferAsset(address to, uint256 tokenId) external onlyUser {
+    function transferAsset(address to, uint256 tokenId) external onlyUser whenNotPaused {
         require(ownerOf(tokenId) == msg.sender, "Not the owner");
         require(identityRegistry.getIdentity(msg.sender).active, "Sender identity not active");
         IdentityRegistry.Identity memory id = identityRegistry.getIdentity(to);
@@ -105,7 +123,7 @@ contract AssetNFT is ERC721 {
     /// active identity's asset has no path here, only through that identity's own
     /// transferAsset(). Combined with getComplianceRecord(from).revokedAt, auditors
     /// can tell a reclaim apart from a voluntary transfer in getTransferHistory().
-    function reclaimAsset(uint256 tokenId, address newOwner) external onlyAdmin {
+    function reclaimAsset(uint256 tokenId, address newOwner) external onlyAdmin whenNotPaused {
         address currentOwner = ownerOf(tokenId);
         require(!identityRegistry.getIdentity(currentOwner).active, "Current owner identity still active");
         require(identityRegistry.getIdentity(newOwner).active, "New owner has no active identity");

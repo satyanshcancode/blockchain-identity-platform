@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useWallet } from "../context/WalletContext";
 import { getAuditLog, getAssetHistory, getComplianceRecord } from "../services/api";
-import { registerIdentity, revokeIdentity, reclaimAsset } from "../services/contractService";
+import { registerIdentity, revokeIdentity, reclaimAsset, pausePlatform, unpausePlatform, getPaused } from "../services/contractService";
 
 // Rendered only if the connected wallet has ADMIN_ROLE or AUDITOR_ROLE - see
 // App.jsx, which doesn't mount this component at all otherwise. The guard
@@ -21,6 +21,10 @@ export default function AdminAuditPanel() {
   const [complianceAddress, setComplianceAddress] = useState("");
   const [compliance, setCompliance] = useState(null);
   const [complianceBusy, setComplianceBusy] = useState(false);
+
+  const [paused, setPausedState] = useState(null);
+  const [pauseBusy, setPauseBusy] = useState(false);
+  const [pauseStatus, setPauseStatus] = useState(null);
 
   const [regAccount, setRegAccount] = useState("");
   const [regDid, setRegDid] = useState("");
@@ -50,9 +54,19 @@ export default function AdminAuditPanel() {
     }
   };
 
+  const loadPaused = useCallback(async () => {
+    if (!roles.isAdmin) return;
+    try {
+      setPausedState(await getPaused(signer));
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [roles.isAdmin, signer]);
+
   useEffect(() => {
     loadAuditLog();
-  }, []);
+    loadPaused();
+  }, [loadPaused]);
 
   if (!roles.isAdmin && !roles.isAuditor) return null;
 
@@ -137,10 +151,48 @@ export default function AdminAuditPanel() {
     }
   };
 
+  const handlePauseToggle = async () => {
+    setPauseBusy(true);
+    setPauseStatus(null);
+    setError(null);
+    try {
+      if (paused) {
+        await unpausePlatform(signer);
+        setPauseStatus("Platform unpaused.");
+      } else {
+        await pausePlatform(signer);
+        setPauseStatus("Platform paused - minting, transfers, and reclaims are now blocked.");
+      }
+      await loadPaused();
+      await loadAuditLog();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPauseBusy(false);
+    }
+  };
+
   return (
     <div style={box}>
       <h2>Admin / audit panel</h2>
       {error && <p style={styles.error}>{error}</p>}
+
+      {roles.isAdmin && paused != null && (
+        <section style={paused ? styles.pausedBanner : styles.activeBanner}>
+          <div style={styles.pausedBannerTitle}>
+            {paused ? "⛔ PLATFORM PAUSED" : "✅ Platform active"}
+          </div>
+          <p style={{ margin: "4px 0 8px" }}>
+            {paused
+              ? "Minting, transfers, and reclaims are blocked platform-wide until unpaused."
+              : "Minting, transfers, and reclaims are operating normally."}
+          </p>
+          <button onClick={handlePauseToggle} disabled={pauseBusy}>
+            {pauseBusy ? "Submitting..." : paused ? "Unpause platform" : "Pause platform"}
+          </button>
+          {pauseStatus && <p>{pauseStatus}</p>}
+        </section>
+      )}
 
       <section style={section}>
         <h3>Audit log</h3>
@@ -300,6 +352,10 @@ function describeEntry(entry) {
       return `#${entry.tokenId}: ${entry.from} → ${entry.to}`;
     case "AssetReclaimed":
       return `#${entry.tokenId}: ${entry.from} → ${entry.to} (reclaimed)`;
+    case "PlatformPaused":
+      return `Paused by ${entry.admin}`;
+    case "PlatformUnpaused":
+      return `Unpaused by ${entry.admin}`;
     default:
       return JSON.stringify(entry);
   }
@@ -314,5 +370,22 @@ const styles = {
   table: { width: "100%", borderCollapse: "collapse" },
   th: { textAlign: "left", borderBottom: "1px solid #ccc", padding: "4px 8px", position: "sticky", top: 0, background: "#fff" },
   td: { borderBottom: "1px solid #eee", padding: "4px 8px" },
-  textarea: { width: "100%", fontFamily: "monospace", fontSize: 12, display: "block" }
+  textarea: { width: "100%", fontFamily: "monospace", fontSize: 12, display: "block" },
+  pausedBannerTitle: { fontSize: 20, fontWeight: "bold" },
+  pausedBanner: {
+    background: "#fdeaea",
+    border: "2px solid #b00020",
+    color: "#7a0016",
+    padding: 16,
+    borderRadius: 4,
+    marginBottom: 16
+  },
+  activeBanner: {
+    background: "#eaf7ea",
+    border: "2px solid #1a7a1a",
+    color: "#14591a",
+    padding: 16,
+    borderRadius: 4,
+    marginBottom: 16
+  }
 };
