@@ -15,8 +15,7 @@ blockchain-identity-platform/
 ├── frontend/           React DApp (identity, asset, role dashboards)
 ├── docs/               Architecture & workflow notes
 ├── hardhat.config.js   Hardhat network/config
-├── package.json        Root (contracts) dependencies
-└── ROADMAP.md          Step-by-step build plan
+└── package.json        Root (contracts) dependencies
 ```
 
 ## Prerequisites
@@ -52,8 +51,7 @@ npm install
 npm start
 ```
 
-See `ROADMAP.md` for the full build sequence and `docs/smart-contract-flow.md` for how the
-contracts interact.
+See `docs/smart-contract-flow.md` for how the contracts interact.
 
 ## Run everything with Docker (no local Node.js/Hardhat install needed)
 
