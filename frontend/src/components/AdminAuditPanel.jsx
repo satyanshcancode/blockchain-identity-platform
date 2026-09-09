@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useWallet } from "../context/WalletContext";
-import { getAuditLog, getAssetHistory, getComplianceRecord, getPendingApprovals } from "../services/api";
+import { getAuditLog, getAssetHistory, getComplianceRecord, getPendingApprovals, getAnomalies } from "../services/api";
 import {
   registerIdentity,
   revokeIdentity,
@@ -41,6 +41,9 @@ export default function AdminAuditPanel() {
   const [approvedByMe, setApprovedByMe] = useState(new Set());
   const [approveBusyId, setApproveBusyId] = useState(null);
   const [approveStatus, setApproveStatus] = useState(null);
+
+  const [anomalies, setAnomalies] = useState([]);
+  const [anomaliesLoading, setAnomaliesLoading] = useState(false);
 
   const [regAccount, setRegAccount] = useState("");
   const [regDid, setRegDid] = useState("");
@@ -103,11 +106,23 @@ export default function AdminAuditPanel() {
     }
   }, [roles.isCoSigner, address, signer]);
 
+  const loadAnomalies = useCallback(async () => {
+    setAnomaliesLoading(true);
+    try {
+      setAnomalies(await getAnomalies());
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAnomaliesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadAuditLog();
     loadPaused();
     loadPendingApprovals();
-  }, [loadPaused, loadPendingApprovals]);
+    loadAnomalies();
+  }, [loadPaused, loadPendingApprovals, loadAnomalies]);
 
   if (!roles.isAdmin && !roles.isAuditor) return null;
 
@@ -260,6 +275,35 @@ export default function AdminAuditPanel() {
           {pauseStatus && <p>{pauseStatus}</p>}
         </section>
       )}
+
+      <section style={anomalies.length > 0 ? styles.pausedBanner : styles.activeBanner}>
+        <div style={styles.pausedBannerTitle}>
+          {anomalies.length > 0
+            ? `⚠️ ${anomalies.length} anomaly alert${anomalies.length === 1 ? "" : "s"}`
+            : "✅ No anomalies detected"}
+        </div>
+        <p style={{ margin: "4px 0 8px" }}>
+          Rule-based checks over the audit log - fixed thresholds (rapid mint bursts,
+          mint-then-immediate-transfer, rapid admin action bursts, unapproved proposal
+          backlogs), not AI/ML.
+        </p>
+        <button onClick={loadAnomalies} disabled={anomaliesLoading}>
+          {anomaliesLoading ? "Scanning..." : "Refresh"}
+        </button>
+        {anomalies.length > 0 && (
+          <ul style={{ marginTop: 12 }}>
+            {anomalies.map((a, i) => (
+              <li key={i} style={{ marginBottom: 12 }}>
+                <strong>{a.ruleLabel}</strong>
+                <p style={{ margin: "4px 0" }}>{a.description}</p>
+                <div style={styles.small}>
+                  {a.events.length} event(s) involved — {a.addresses.join(", ")}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <section style={section}>
         <h3>Audit log</h3>

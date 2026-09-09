@@ -16,6 +16,7 @@ export const getAsset = (tokenId) => request(`/api/assets/${tokenId}`);
 export const getAssetsByOwner = (address) => request(`/api/assets/owner/${address}`);
 export const getAssetHistory = (tokenId) => request(`/api/assets/${tokenId}/history`);
 export const getAuditLog = () => request("/api/audit");
+export const getAnomalies = () => request("/api/audit/anomalies");
 export const getIdentity = (address) => request(`/api/identity/${address}`);
 export const getComplianceRecord = (address) => request(`/api/identity/${address}/compliance`);
 export const getPendingApprovals = () => request("/api/approvals/pending");
