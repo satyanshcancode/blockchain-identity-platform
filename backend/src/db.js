@@ -91,6 +91,8 @@ function rowToEntry(row) {
   switch (row.type) {
     case "IdentityRegistered":
       return { ...base, account: row.account, did: payload.did, uri: payload.uri };
+    case "IdentityRevoked":
+      return { ...base, account: row.account };
     case "AssetMinted":
       return { ...base, tokenId: row.token_id, owner: row.account, uri: payload.uri };
     case "AssetTransferred":

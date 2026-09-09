@@ -472,6 +472,8 @@ function describeEntry(entry) {
   switch (entry.type) {
     case "IdentityRegistered":
       return `${entry.account} — ${entry.did}`;
+    case "IdentityRevoked":
+      return `${entry.account} — revoked`;
     case "AssetMinted":
       return `#${entry.tokenId} → ${entry.owner}`;
     case "AssetTransferred":

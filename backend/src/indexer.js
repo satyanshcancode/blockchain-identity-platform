@@ -15,7 +15,10 @@ const { waitForRpc } = require("./config/waitForRpc");
 
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 
-const identityAbi = ["event IdentityRegistered(address indexed account, string did, string metadataURI)"];
+const identityAbi = [
+  "event IdentityRegistered(address indexed account, string did, string metadataURI)",
+  "event IdentityRevoked(address indexed account)"
+];
 const assetAbi = [
   "event AssetMinted(uint256 indexed tokenId, address indexed owner, string uri)",
   "event AssetTransferred(uint256 indexed tokenId, address indexed from, address indexed to)",
@@ -45,6 +48,12 @@ function attachListeners(identityContract, assetContract, approvalContract) {
     record("IdentityRegistered", { account, payload: { did, uri } }, event.log);
     persistNow();
     console.log("Identity registered:", account, did);
+  });
+
+  identityContract.on("IdentityRevoked", (account, event) => {
+    record("IdentityRevoked", { account }, event.log);
+    persistNow();
+    console.log("Identity revoked:", account);
   });
 
   assetContract.on("AssetMinted", (tokenId, owner, uri, event) => {
@@ -167,6 +176,9 @@ async function start() {
     caught += await catchUpEvent(identityContract, "IdentityRegistered", fromBlock, currentBlock, (args) => ({
       account: args.account,
       payload: { did: args.did, uri: args.metadataURI }
+    }));
+    caught += await catchUpEvent(identityContract, "IdentityRevoked", fromBlock, currentBlock, (args) => ({
+      account: args.account
     }));
     caught += await catchUpEvent(assetContract, "AssetMinted", fromBlock, currentBlock, (args) => ({
       tokenId: args.tokenId.toString(),
