@@ -288,6 +288,14 @@ async function catchUpAll(identityContract, assetContract, approvalContract, fro
 // notices and restarts the backend. Uses a self-rescheduling setTimeout
 // (not setInterval) with a re-entrancy guard so a slow check can't overlap
 // with the next one.
+//
+// Two distinct kinds of mismatch are handled, mirroring start()'s two
+// branches above but re-checked on every tick instead of only at boot:
+// checkpoint BEHIND chain height (normal backfill) and checkpoint AHEAD of
+// chain height (chain reset - see below). Confirmed live: recreating
+// hardhat-node without restarting the backend replaces the chain with a
+// shorter one, so the persisted checkpoint ends up taller than the new
+// chain's actual height.
 function scheduleHeartbeat(identityContract, assetContract, approvalContract) {
   let running = false;
   async function tick() {
@@ -296,7 +304,51 @@ function scheduleHeartbeat(identityContract, assetContract, approvalContract) {
       try {
         const currentBlock = await provider.getBlockNumber();
         const lastProcessed = getLastProcessedBlock();
-        if (lastProcessed != null && currentBlock > lastProcessed) {
+
+        if (lastProcessed != null && lastProcessed > currentBlock) {
+          // Same condition start() checks at boot (see its comment above),
+          // just re-checked on the heartbeat too - a reset that happens
+          // while the backend is already running would otherwise never be
+          // caught, since this branch only ran once, before start()
+          // subscribed the live listeners.
+          console.warn(
+            `Indexer heartbeat: chain height (${currentBlock}) is behind persisted checkpoint (${lastProcessed}) - ` +
+            `chain was likely reset (e.g. hardhat-node recreated without a backend restart); re-scanning from block 0.`
+          );
+
+          // Resetting the checkpoint alone isn't enough: the live
+          // listeners' internal ethers PollingEventSubscriber instances
+          // (see the polling:true comment above) each track their own
+          // #blockNumber cursor, left pointing at the OLD, now-taller
+          // chain's height. That subscriber only self-corrects when its
+          // cursor falls BEHIND the real height by more than 60 blocks
+          // (subscriber-polling.js's "sliding window" check) - never when
+          // it's ahead - so eth_getLogs keeps getting called with
+          // fromBlock > toBlock, which silently returns no logs forever
+          // (confirmed directly against the RPC). Tearing the subscriptions
+          // down and re-attaching discards those stuck subscribers; ethers
+          // creates fresh ones on the next .on(), which bootstrap their
+          // cursor from whatever the chain's height is AT THAT MOMENT - the
+          // new, reset chain - so live indexing actually resumes instead of
+          // permanently degrading to this heartbeat's periodic backfill.
+          // Done before the backfill below, mirroring start()'s "subscribe
+          // before scanning history" order, so an event landing mid-backfill
+          // can't fall through the gap.
+          await identityContract.removeAllListeners();
+          await assetContract.removeAllListeners();
+          await approvalContract.removeAllListeners();
+          attachListeners(identityContract, assetContract, approvalContract);
+
+          resetProcessedBlock(0);
+          persistNow();
+          const caught = await catchUpAll(identityContract, assetContract, approvalContract, 1, currentBlock);
+          markProcessedThrough(currentBlock);
+          persistNow();
+          console.warn(
+            `Indexer heartbeat: chain reset detected and recovered - re-scanned from block 0, replayed ${caught} ` +
+            `event(s), checkpoint now at ${currentBlock}, live listeners re-subscribed.`
+          );
+        } else if (lastProcessed != null && currentBlock > lastProcessed) {
           const fromBlock = lastProcessed + 1;
           console.warn(
             `Indexer heartbeat: checkpoint (${lastProcessed}) is behind chain height (${currentBlock}) - ` +
