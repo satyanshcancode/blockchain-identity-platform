@@ -6,12 +6,32 @@ const path = require("path");
 // flow on revokeIdentity()/reclaimAsset() (see ApprovalRegistry.sol) - the
 // deployer plus Hardhat's default accounts #1 and #2. Override via
 // CO_SIGNER_2/CO_SIGNER_3 env vars for a non-Hardhat network.
+//
+// Accounts #3-#6 get MANAGER_ROLE/AUDITOR_ROLE/USER_ROLE the same way -
+// without this, a fresh deploy leaves onlyUser-gated functions
+// (transferAsset, updateMetadata) uncallable by anyone, since ADMIN_ROLE
+// doesn't substitute for USER_ROLE the way it does for manager/auditor
+// checks. Two USER_ROLE accounts so a demo can show a transfer between two
+// non-admin wallets. Override via MANAGER_ACCOUNT/AUDITOR_ACCOUNT/
+// USER_ACCOUNT_1/USER_ACCOUNT_2 env vars for a non-Hardhat network.
 async function main() {
-  const [deployer, defaultCoSigner2, defaultCoSigner3] = await hre.ethers.getSigners();
+  const [
+    deployer,
+    defaultCoSigner2,
+    defaultCoSigner3,
+    defaultManager,
+    defaultAuditor,
+    defaultUser1,
+    defaultUser2
+  ] = await hre.ethers.getSigners();
   console.log("Deploying with account:", deployer.address);
 
   const coSigner2 = process.env.CO_SIGNER_2 || defaultCoSigner2.address;
   const coSigner3 = process.env.CO_SIGNER_3 || defaultCoSigner3.address;
+  const managerAccount = process.env.MANAGER_ACCOUNT || defaultManager.address;
+  const auditorAccount = process.env.AUDITOR_ACCOUNT || defaultAuditor.address;
+  const userAccount1 = process.env.USER_ACCOUNT_1 || defaultUser1.address;
+  const userAccount2 = process.env.USER_ACCOUNT_2 || defaultUser2.address;
 
   const RoleRegistry = await hre.ethers.getContractFactory("RoleRegistry");
   const roleRegistry = await RoleRegistry.deploy(deployer.address);
@@ -46,6 +66,17 @@ async function main() {
   await (await roleRegistry.assignRole(CO_SIGNER_ROLE, coSigner2)).wait();
   await (await roleRegistry.assignRole(CO_SIGNER_ROLE, coSigner3)).wait();
   console.log("Co-signers:", deployer.address, coSigner2, coSigner3);
+
+  const MANAGER_ROLE = await roleRegistry.MANAGER_ROLE();
+  const AUDITOR_ROLE = await roleRegistry.AUDITOR_ROLE();
+  const USER_ROLE = await roleRegistry.USER_ROLE();
+  await (await roleRegistry.assignRole(MANAGER_ROLE, managerAccount)).wait();
+  await (await roleRegistry.assignRole(AUDITOR_ROLE, auditorAccount)).wait();
+  await (await roleRegistry.assignRole(USER_ROLE, userAccount1)).wait();
+  await (await roleRegistry.assignRole(USER_ROLE, userAccount2)).wait();
+  console.log("Manager:", managerAccount);
+  console.log("Auditor:", auditorAccount);
+  console.log("Users:", userAccount1, userAccount2);
 
   await (await approvalRegistry.setAuthorizedCaller(identityRegistryAddress, true)).wait();
   await (await approvalRegistry.setAuthorizedCaller(assetNFTAddress, true)).wait();
