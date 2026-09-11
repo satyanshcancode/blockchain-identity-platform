@@ -31,7 +31,22 @@ function getPrivilegedContract() {
   return new ethers.Contract(process.env.IDENTITY_REGISTRY_ADDRESS, IDENTITY_ABI, wallet);
 }
 
+// ethers.isAddress() rejects anything that isn't a well-formed 20-byte hex
+// address up front, before it ever reaches an ethers Contract call below -
+// otherwise a malformed address (wrong length, non-hex, empty, etc.) falls
+// through to ethers' ENS-name resolution fallback, which tries to resolve it
+// as a name and throws its own raw error, surfacing as an unfriendly 500
+// that leaks ethers' internals instead of a clean "bad input" response.
+function requireValidAddress(req, res) {
+  if (!ethers.isAddress(req.params.address)) {
+    res.status(400).json({ error: "Invalid address." });
+    return false;
+  }
+  return true;
+}
+
 router.get("/:address", async (req, res) => {
+  if (!requireValidAddress(req, res)) return;
   try {
     const identity = await resolveDID(req.params.address);
     // resolveDID() returns ethers' raw Result (an Array subclass) for the
@@ -48,6 +63,7 @@ router.get("/:address", async (req, res) => {
 // revocation history. Caller-authenticated by requireRole() (see the note
 // above getPrivilegedContract()).
 router.get("/:address/compliance", requireRole("AUDITOR", "ADMIN"), async (req, res) => {
+  if (!requireValidAddress(req, res)) return;
   try {
     const contract = getPrivilegedContract();
     const record = await contract.getComplianceRecord(req.params.address);

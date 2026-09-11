@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { isAddress } from "ethers";
 import { useWallet } from "../context/WalletContext";
 import {
   getAuditLog,
@@ -165,8 +166,16 @@ export default function AdminAuditPanel() {
 
   const handleComplianceLookup = async (e) => {
     e.preventDefault();
-    setComplianceBusy(true);
     setError(null);
+    // Catches a malformed address here, before it's sent - the backend
+    // rejects it too (see backend/src/routes/identity.js), but a typo
+    // shouldn't need a round trip (and a MetaMask signature, for this
+    // auth-gated route) just to find out.
+    if (!isAddress(complianceAddress)) {
+      setError("Enter a valid address (0x followed by 40 hex characters).");
+      return;
+    }
+    setComplianceBusy(true);
     try {
       setCompliance(await getComplianceRecord(complianceAddress, signer, address));
     } catch (err) {
@@ -178,9 +187,13 @@ export default function AdminAuditPanel() {
 
   const handleRegister = async (e) => {
     e.preventDefault();
-    setRegBusy(true);
     setRegStatus(null);
     setError(null);
+    if (!isAddress(regAccount)) {
+      setError("Enter a valid account address (0x followed by 40 hex characters).");
+      return;
+    }
+    setRegBusy(true);
     try {
       await registerIdentity(signer, regAccount, regDid, regUri, regSignature);
       setRegStatus(`Identity registered for ${regAccount}.`);
@@ -198,9 +211,13 @@ export default function AdminAuditPanel() {
 
   const handleRevoke = async (e) => {
     e.preventDefault();
-    setRevokeBusy(true);
     setRevokeStatus(null);
     setError(null);
+    if (!isAddress(revokeAddress)) {
+      setError("Enter a valid address (0x followed by 40 hex characters).");
+      return;
+    }
+    setRevokeBusy(true);
     try {
       await revokeIdentity(signer, revokeAddress);
       setRevokeStatus(
@@ -218,9 +235,13 @@ export default function AdminAuditPanel() {
 
   const handleReclaim = async (e) => {
     e.preventDefault();
-    setReclaimBusy(true);
     setReclaimStatus(null);
     setError(null);
+    if (!isAddress(reclaimNewOwner)) {
+      setError("Enter a valid new-owner address (0x followed by 40 hex characters).");
+      return;
+    }
+    setReclaimBusy(true);
     try {
       await reclaimAsset(signer, reclaimTokenId, reclaimNewOwner);
       setReclaimStatus(
