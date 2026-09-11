@@ -100,6 +100,8 @@ function rowToEntry(row) {
       return { ...base, tokenId: row.token_id, from: row.from_address, to: row.to_address };
     case "PlatformPaused":
     case "PlatformUnpaused":
+    case "IdentityRegistryPaused":
+    case "IdentityRegistryUnpaused":
       return { ...base, admin: row.account };
     case "ActionProposed":
       return {

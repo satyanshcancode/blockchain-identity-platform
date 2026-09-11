@@ -29,7 +29,12 @@ const IDENTITY_REGISTRY_ABI = [
   "function registerIdentity(address account, string did, string metadataURI, bytes signature)",
   "function updateMetadata(string newMetadataURI)",
   "function revokeIdentity(address account) returns (uint256 proposalId)",
-  "function approveRevokeIdentity(uint256 proposalId)"
+  "function approveRevokeIdentity(uint256 proposalId)",
+  "function pause()",
+  "function unpause()",
+  "function paused() view returns (bool)",
+  "error EnforcedPause()",
+  "error ExpectedPause()"
 ];
 
 const ASSET_NFT_ABI = [
@@ -139,20 +144,28 @@ export async function signRegistration(signer, { did, metadataURI }) {
 }
 
 export async function updateMetadata(signer, newMetadataURI) {
-  const tx = await getIdentityRegistry(signer).updateMetadata(newMetadataURI);
-  return tx.wait();
+  const contract = getIdentityRegistry(signer);
+  return withFriendlyPauseErrors(contract, async () => {
+    const tx = await contract.updateMetadata(newMetadataURI);
+    return tx.wait();
+  });
 }
 
-// EnforcedPause/ExpectedPause are declared in ASSET_NFT_ABI, but ethers v6
-// doesn't reliably auto-decode a custom error's name back out of a
-// CALL_EXCEPTION for every provider/call path (confirmed against Hardhat
-// Network: Interface.parseError() decodes the raw revert data correctly,
-// but the error ethers actually throws still says "unknown custom error").
-// Decode err.data ourselves as a fallback so a paused-platform revert always
-// surfaces a clear message instead of that opaque one.
+// EnforcedPause/ExpectedPause are declared in both ASSET_NFT_ABI and
+// IDENTITY_REGISTRY_ABI (AssetNFT and IdentityRegistry each have their own,
+// independent Pausable state - see IdentityRegistry.sol's pause()/unpause()
+// doc comment), but ethers v6 doesn't reliably auto-decode a custom error's
+// name back out of a CALL_EXCEPTION for every provider/call path (confirmed
+// against Hardhat Network: Interface.parseError() decodes the raw revert
+// data correctly, but the error ethers actually throws still says "unknown
+// custom error"). Decode err.data ourselves as a fallback so a paused
+// revert always surfaces a clear message instead of that opaque one. The
+// message is intentionally generic (not "asset operations are paused") since
+// this same helper wraps calls into both contracts - callers already know
+// which operation they attempted.
 const PAUSE_ERROR_MESSAGES = {
-  EnforcedPause: "Platform is paused - minting, transfers, and reclaims are temporarily disabled.",
-  ExpectedPause: "Platform is not currently paused."
+  EnforcedPause: "This operation is paused right now - try again once it's unpaused.",
+  ExpectedPause: "This operation is not currently paused."
 };
 
 function withFriendlyPauseErrors(contract, fn) {
@@ -193,8 +206,11 @@ export async function transferAsset(signer, to, tokenId) {
 // - the account/did/metadataURI must match exactly what was signed, or the
 // contract's signature check reverts.
 export async function registerIdentity(signer, account, did, metadataURI, signature) {
-  const tx = await getIdentityRegistry(signer).registerIdentity(account, did, metadataURI, signature);
-  return tx.wait();
+  const contract = getIdentityRegistry(signer);
+  return withFriendlyPauseErrors(contract, async () => {
+    const tx = await contract.registerIdentity(account, did, metadataURI, signature);
+    return tx.wait();
+  });
 }
 
 // High-risk, 2-of-N co-signer gated (see ApprovalRegistry.sol / RoleRegistry's
@@ -203,13 +219,19 @@ export async function registerIdentity(signer, account, did, metadataURI, signat
 // approveRevokeIdentity() with the resulting proposal id (see the Pending
 // Approvals list, fed by GET /api/approvals/pending) before it takes effect.
 export async function revokeIdentity(signer, account) {
-  const tx = await getIdentityRegistry(signer).revokeIdentity(account);
-  return tx.wait();
+  const contract = getIdentityRegistry(signer);
+  return withFriendlyPauseErrors(contract, async () => {
+    const tx = await contract.revokeIdentity(account);
+    return tx.wait();
+  });
 }
 
 export async function approveRevokeIdentity(signer, proposalId) {
-  const tx = await getIdentityRegistry(signer).approveRevokeIdentity(proposalId);
-  return tx.wait();
+  const contract = getIdentityRegistry(signer);
+  return withFriendlyPauseErrors(contract, async () => {
+    const tx = await contract.approveRevokeIdentity(proposalId);
+    return tx.wait();
+  });
 }
 
 // High-risk, 2-of-N co-signer gated - like revokeIdentity(), this only
@@ -230,12 +252,16 @@ export async function approveReclaimAsset(signer, proposalId) {
   });
 }
 
-// Emergency circuit breaker: while paused, mintAsset/transferAsset/reclaimAsset
-// all revert EnforcedPause (see withFriendlyPauseErrors above). getPaused() is
-// a live on-chain read via the connected wallet, not the backend - same
-// exception the architecture already makes for role checks, since it's
-// UI-gating state tied to the connected signer, not an indexed audit record.
-export async function pausePlatform(signer) {
+// Two INDEPENDENT emergency circuit breakers, not one - see IdentityRegistry.sol's
+// pause()/unpause() doc comment for why they're separate contracts/states rather
+// than a single shared flag. While AssetNFT is paused, mintAsset/transferAsset/
+// reclaimAsset revert EnforcedPause; while IdentityRegistry is paused,
+// registerIdentity/revokeIdentity/approveRevokeIdentity/updateMetadata do (see
+// withFriendlyPauseErrors above). Both getXPaused() reads are live on-chain reads
+// via the connected wallet, not the backend - same exception the architecture
+// already makes for role checks, since it's UI-gating state tied to the
+// connected signer, not an indexed audit record.
+export async function pauseAssets(signer) {
   const contract = getAssetNFT(signer);
   return withFriendlyPauseErrors(contract, async () => {
     const tx = await contract.pause();
@@ -243,7 +269,7 @@ export async function pausePlatform(signer) {
   });
 }
 
-export async function unpausePlatform(signer) {
+export async function unpauseAssets(signer) {
   const contract = getAssetNFT(signer);
   return withFriendlyPauseErrors(contract, async () => {
     const tx = await contract.unpause();
@@ -251,6 +277,26 @@ export async function unpausePlatform(signer) {
   });
 }
 
-export async function getPaused(signerOrProvider) {
+export async function getAssetsPaused(signerOrProvider) {
   return getAssetNFT(signerOrProvider).paused();
+}
+
+export async function pauseIdentity(signer) {
+  const contract = getIdentityRegistry(signer);
+  return withFriendlyPauseErrors(contract, async () => {
+    const tx = await contract.pause();
+    return tx.wait();
+  });
+}
+
+export async function unpauseIdentity(signer) {
+  const contract = getIdentityRegistry(signer);
+  return withFriendlyPauseErrors(contract, async () => {
+    const tx = await contract.unpause();
+    return tx.wait();
+  });
+}
+
+export async function getIdentityPaused(signerOrProvider) {
+  return getIdentityRegistry(signerOrProvider).paused();
 }

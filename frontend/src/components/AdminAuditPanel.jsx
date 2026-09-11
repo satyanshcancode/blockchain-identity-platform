@@ -8,9 +8,12 @@ import {
   approveRevokeIdentity,
   approveReclaimAsset,
   hasApproved,
-  pausePlatform,
-  unpausePlatform,
-  getPaused
+  pauseAssets,
+  unpauseAssets,
+  getAssetsPaused,
+  pauseIdentity,
+  unpauseIdentity,
+  getIdentityPaused
 } from "../services/contractService";
 
 // Rendered only if the connected wallet has ADMIN_ROLE or AUDITOR_ROLE - see
@@ -32,7 +35,13 @@ export default function AdminAuditPanel() {
   const [compliance, setCompliance] = useState(null);
   const [complianceBusy, setComplianceBusy] = useState(false);
 
-  const [paused, setPausedState] = useState(null);
+  // AssetNFT and IdentityRegistry each have their OWN independent pause
+  // state (see IdentityRegistry.sol's pause()/unpause() doc comment for why
+  // they're not shared) - both are tracked separately so the banner can
+  // honestly show a partial state (e.g. one paused, the other not) instead
+  // of collapsing them into a single flag that could misrepresent reality.
+  const [assetsPaused, setAssetsPaused] = useState(null);
+  const [identityPaused, setIdentityPaused] = useState(null);
   const [pauseBusy, setPauseBusy] = useState(false);
   const [pauseStatus, setPauseStatus] = useState(null);
 
@@ -76,7 +85,9 @@ export default function AdminAuditPanel() {
   const loadPaused = useCallback(async () => {
     if (!roles.isAdmin) return;
     try {
-      setPausedState(await getPaused(signer));
+      const [assets, identity] = await Promise.all([getAssetsPaused(signer), getIdentityPaused(signer)]);
+      setAssetsPaused(assets);
+      setIdentityPaused(identity);
     } catch (err) {
       setError(err.message);
     }
@@ -85,7 +96,8 @@ export default function AdminAuditPanel() {
   // Which pending proposals the CONNECTED wallet has already approved - the
   // backend's list doesn't include this (it's per-viewer, not indexed audit
   // data), so it's fetched live via the same on-chain-read-through-the-
-  // connected-wallet exception role checks and getPaused() already use. Only
+  // connected-wallet exception role checks and getAssetsPaused()/getIdentityPaused()
+  // already use. Only
   // bothers making those calls for a co-signer, since only a co-signer could
   // ever see the Approve button anyway.
   const loadPendingApprovals = useCallback(async () => {
@@ -233,25 +245,62 @@ export default function AdminAuditPanel() {
     }
   };
 
-  const handlePauseToggle = async () => {
+  // Drives BOTH independent pause states toward one target (true = pause
+  // everything, false = resume everything) as two sequential transactions -
+  // skipping whichever contract is already at the target state, so clicking
+  // "Pause everything" from a partial state (say assets already paused)
+  // doesn't needlessly resubmit a call that would just revert. If the
+  // second step fails (rejected in MetaMask, reverts, network issue) after
+  // the first already landed on-chain, the platform is left in a genuine
+  // partial state - loadPaused() below re-reads BOTH from the chain
+  // afterward regardless of outcome, so the banner always reflects reality
+  // rather than assuming the action fully succeeded.
+  const handleSetPaused = async (targetPaused) => {
     setPauseBusy(true);
     setPauseStatus(null);
     setError(null);
-    try {
-      if (paused) {
-        await unpausePlatform(signer);
-        setPauseStatus("Platform unpaused.");
-      } else {
-        await pausePlatform(signer);
-        setPauseStatus("Platform paused - minting, transfers, and reclaims are now blocked.");
-      }
-      await loadPaused();
-      await loadAuditLog();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setPauseBusy(false);
+
+    const steps = [];
+    if (assetsPaused !== targetPaused) {
+      steps.push({ label: "asset operations", run: targetPaused ? pauseAssets : unpauseAssets });
     }
+    if (identityPaused !== targetPaused) {
+      steps.push({ label: "identity operations", run: targetPaused ? pauseIdentity : unpauseIdentity });
+    }
+
+    if (steps.length === 0) {
+      setPauseStatus(targetPaused ? "Already fully paused." : "Already fully active.");
+      setPauseBusy(false);
+      return;
+    }
+
+    let failedAt = null;
+    for (let i = 0; i < steps.length; i++) {
+      setPauseStatus(
+        `${targetPaused ? "Pausing" : "Resuming"} ${steps[i].label} (${i + 1}/${steps.length})...`
+      );
+      try {
+        await steps[i].run(signer);
+      } catch (err) {
+        failedAt = steps[i].label;
+        setError(
+          `Failed to ${targetPaused ? "pause" : "resume"} ${steps[i].label}: ${err.message} - ` +
+            `the platform may now be in a partial state; see the banner below for the actual result.`
+        );
+        break;
+      }
+    }
+
+    await loadPaused();
+    await loadAuditLog();
+    setPauseStatus(
+      failedAt
+        ? null
+        : targetPaused
+          ? "Both asset and identity operations are now paused."
+          : "Both asset and identity operations are now active."
+    );
+    setPauseBusy(false);
   };
 
   return (
@@ -259,22 +308,36 @@ export default function AdminAuditPanel() {
       <h2>Admin / audit panel</h2>
       {error && <p style={styles.error}>{error}</p>}
 
-      {roles.isAdmin && paused != null && (
-        <section style={paused ? styles.pausedBanner : styles.activeBanner}>
-          <div style={styles.pausedBannerTitle}>
-            {paused ? "⛔ PLATFORM PAUSED" : "✅ Platform active"}
-          </div>
-          <p style={{ margin: "4px 0 8px" }}>
-            {paused
-              ? "Minting, transfers, and reclaims are blocked platform-wide until unpaused."
-              : "Minting, transfers, and reclaims are operating normally."}
-          </p>
-          <button onClick={handlePauseToggle} disabled={pauseBusy}>
-            {pauseBusy ? "Submitting..." : paused ? "Unpause platform" : "Pause platform"}
-          </button>
-          {pauseStatus && <p>{pauseStatus}</p>}
-        </section>
-      )}
+      {roles.isAdmin && assetsPaused != null && identityPaused != null && (() => {
+        const bothActive = !assetsPaused && !identityPaused;
+        const bothPaused = assetsPaused && identityPaused;
+        const bannerStyle = bothPaused ? styles.pausedBanner : bothActive ? styles.activeBanner : styles.partialBanner;
+        const title = bothPaused
+          ? "⛔ FULLY PAUSED"
+          : bothActive
+            ? "✅ Active"
+            : "⚠️ PARTIALLY PAUSED";
+        return (
+          <section style={bannerStyle}>
+            <div style={styles.pausedBannerTitle}>{title}</div>
+            <p style={{ margin: "4px 0 4px" }}>
+              Asset operations (mint / transfer / reclaim):{" "}
+              <strong>{assetsPaused ? "paused" : "active"}</strong>
+            </p>
+            <p style={{ margin: "4px 0 8px" }}>
+              Identity operations (register / revoke / approve revoke / update metadata):{" "}
+              <strong>{identityPaused ? "paused" : "active"}</strong>
+            </p>
+            <button onClick={() => handleSetPaused(true)} disabled={pauseBusy || bothPaused}>
+              {pauseBusy ? "Working..." : "Pause everything"}
+            </button>{" "}
+            <button onClick={() => handleSetPaused(false)} disabled={pauseBusy || bothActive}>
+              {pauseBusy ? "Working..." : "Resume everything"}
+            </button>
+            {pauseStatus && <p>{pauseStatus}</p>}
+          </section>
+        );
+      })()}
 
       <section style={anomalies.length > 0 ? styles.pausedBanner : styles.activeBanner}>
         <div style={styles.pausedBannerTitle}>
@@ -525,9 +588,13 @@ function describeEntry(entry) {
     case "AssetReclaimed":
       return `#${entry.tokenId}: ${entry.from} → ${entry.to} (reclaimed)`;
     case "PlatformPaused":
-      return `Paused by ${entry.admin}`;
+      return `Asset operations paused by ${entry.admin}`;
     case "PlatformUnpaused":
-      return `Unpaused by ${entry.admin}`;
+      return `Asset operations unpaused by ${entry.admin}`;
+    case "IdentityRegistryPaused":
+      return `Identity operations paused by ${entry.admin}`;
+    case "IdentityRegistryUnpaused":
+      return `Identity operations unpaused by ${entry.admin}`;
     case "ActionProposed":
       return `#${entry.proposalId} ${ACTION_TYPE_NAMES[entry.actionType] ?? entry.actionType} proposed by ${entry.proposer}`;
     case "ActionApproved":
@@ -563,6 +630,14 @@ const styles = {
     background: "#eaf7ea",
     border: "2px solid #1a7a1a",
     color: "#14591a",
+    padding: 16,
+    borderRadius: 4,
+    marginBottom: 16
+  },
+  partialBanner: {
+    background: "#fff4e0",
+    border: "2px solid #b26a00",
+    color: "#7a4b00",
     padding: 16,
     borderRadius: 4,
     marginBottom: 16

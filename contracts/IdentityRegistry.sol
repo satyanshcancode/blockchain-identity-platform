@@ -5,10 +5,11 @@ import "./RoleRegistry.sol";
 import "./ApprovalRegistry.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
 /// @title IdentityRegistry
 /// @notice Anchors a DID + metadata pointer (IPFS) for each on-chain identity.
-contract IdentityRegistry is EIP712 {
+contract IdentityRegistry is EIP712, Pausable {
     RoleRegistry public roleRegistry;
     ApprovalRegistry public approvalRegistry;
 
@@ -43,6 +44,12 @@ contract IdentityRegistry is EIP712 {
     event IdentityRegistered(address indexed account, string did, string metadataURI);
     event IdentityRevoked(address indexed account);
     event IdentityMetadataUpdated(address indexed account, string newMetadataURI);
+    // Deliberately named distinctly from AssetNFT's PlatformPaused/PlatformUnpaused -
+    // this is a SEPARATE, independent circuit breaker (see the class-level note on
+    // pause()/unpause() below), not the same pause state. Reusing AssetNFT's event
+    // names here would make the audit log ambiguous about which one actually fired.
+    event IdentityRegistryPaused(address indexed admin);
+    event IdentityRegistryUnpaused(address indexed admin);
 
     modifier onlyAdmin() {
         require(roleRegistry.hasRole(roleRegistry.ADMIN_ROLE(), msg.sender), "Not admin");
@@ -73,6 +80,28 @@ contract IdentityRegistry is EIP712 {
         approvalRegistry = ApprovalRegistry(_approvalRegistry);
     }
 
+    /// @notice Emergency circuit breaker for identity operations specifically -
+    /// registerIdentity/revokeIdentity/approveRevokeIdentity/updateMetadata (see
+    /// whenNotPaused below). Deliberately independent of AssetNFT's own pause:
+    /// sharing one pause flag across both contracts would need either a runtime
+    /// reference from this contract to AssetNFT's address (wired in a separate
+    /// step after AssetNFT is deployed, since AssetNFT doesn't exist yet when this
+    /// contract is constructed - a hard dependency that silently breaks every
+    /// pause-gated function here if that wiring is ever skipped or wrong) or a
+    /// third shared registry contract both would need to defer to. Two
+    /// independent, self-contained switches - admin/frontend fires both together
+    /// for a full platform freeze (see AdminAuditPanel.jsx) - were judged less
+    /// risky than either kind of coupling.
+    function pause() external onlyAdmin {
+        _pause();
+        emit IdentityRegistryPaused(msg.sender);
+    }
+
+    function unpause() external onlyAdmin {
+        _unpause();
+        emit IdentityRegistryUnpaused(msg.sender);
+    }
+
     /// @notice Admin submits the registration, but it only succeeds if `account`
     /// itself signed an EIP-712 RegisterIdentity message consenting to this exact
     /// DID/metadataURI binding (see scripts/signRegistration.js). The nonce in the
@@ -83,7 +112,7 @@ contract IdentityRegistry is EIP712 {
         string calldata did,
         string calldata metadataURI,
         bytes calldata signature
-    ) external onlyAdmin {
+    ) external onlyAdmin whenNotPaused {
         uint256 nonce = nonces[account];
         bytes32 structHash = keccak256(
             abi.encode(
@@ -111,7 +140,7 @@ contract IdentityRegistry is EIP712 {
     /// proposal - it does NOT revoke anything yet. A second, different
     /// co-signer must call approveRevokeIdentity() with the returned proposal
     /// id for the revocation to actually take effect.
-    function revokeIdentity(address account) external onlyCoSigner returns (uint256 proposalId) {
+    function revokeIdentity(address account) external onlyCoSigner whenNotPaused returns (uint256 proposalId) {
         require(identities[account].active, "Identity not active");
         return approvalRegistry.propose(msg.sender, ApprovalRegistry.ActionType.RevokeIdentity, abi.encode(account));
     }
@@ -120,7 +149,7 @@ contract IdentityRegistry is EIP712 {
     /// same transaction the moment this crosses ApprovalRegistry's
     /// REQUIRED_APPROVALS threshold - re-checks the identity is still active,
     /// since time may have passed since revokeIdentity() was first called.
-    function approveRevokeIdentity(uint256 proposalId) external onlyCoSigner {
+    function approveRevokeIdentity(uint256 proposalId) external onlyCoSigner whenNotPaused {
         (bool nowExecuted, bytes memory data) = approvalRegistry.approve(msg.sender, proposalId);
         if (!nowExecuted) return;
 
@@ -137,7 +166,7 @@ contract IdentityRegistry is EIP712 {
     /// DID at new metadata (e.g. a new IPFS profile). Requires USER_ROLE, i.e. the
     /// account must actually be a recognized platform user, and the identity must
     /// still be active. Admin-controlled fields (did, active) are untouched.
-    function updateMetadata(string calldata newMetadataURI) external onlyUser {
+    function updateMetadata(string calldata newMetadataURI) external onlyUser whenNotPaused {
         require(identities[msg.sender].active, "Identity not active");
         identities[msg.sender].metadataURI = newMetadataURI;
         complianceRecords[msg.sender].lastUpdatedAt = block.timestamp;

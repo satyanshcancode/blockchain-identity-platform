@@ -347,6 +347,78 @@ describe("Platform core flow", function () {
     expect(await assets.ownerOf(1)).to.equal(user.address);
   });
 
+  it("lets only admin pause and unpause IdentityRegistry, emitting IdentityRegistryPaused/IdentityRegistryUnpaused", async function () {
+    const { admin, manager, auditor, identities } = await deployPlatform();
+
+    await expect(identities.connect(manager).pause()).to.be.revertedWith("Not admin");
+    await expect(identities.connect(auditor).pause()).to.be.revertedWith("Not admin");
+    expect(await identities.paused()).to.equal(false);
+
+    await expect(identities.connect(admin).pause())
+      .to.emit(identities, "IdentityRegistryPaused")
+      .withArgs(admin.address);
+    expect(await identities.paused()).to.equal(true);
+
+    await expect(identities.connect(manager).unpause()).to.be.revertedWith("Not admin");
+    expect(await identities.paused()).to.equal(true);
+
+    await expect(identities.connect(admin).unpause())
+      .to.emit(identities, "IdentityRegistryUnpaused")
+      .withArgs(admin.address);
+    expect(await identities.paused()).to.equal(false);
+  });
+
+  it("blocks registerIdentity, revokeIdentity, approveRevokeIdentity, and updateMetadata while IdentityRegistry is paused - independently of AssetNFT's own pause - and restores them after unpause", async function () {
+    const { admin, coSigner2, manager, user, identities, assets, approvalRegistry } = await deployPlatform();
+
+    // Propose a revoke BEFORE pausing, so there's a pending proposal on hand
+    // to try (and fail) approving once paused.
+    const revokeTx = await identities.connect(admin).revokeIdentity(user.address);
+    const proposalId = await getProposalId(revokeTx, approvalRegistry);
+
+    const freshSig = await signRegistration(
+      identities, coSigner2, coSigner2.address, "did:ethr:0xFreshPause", "ipfs://fresh-pause"
+    );
+
+    await identities.connect(admin).pause();
+    expect(await identities.paused()).to.equal(true);
+
+    await expect(
+      identities.connect(admin).registerIdentity(coSigner2.address, "did:ethr:0xFreshPause", "ipfs://fresh-pause", freshSig)
+    ).to.be.revertedWithCustomError(identities, "EnforcedPause");
+
+    await expect(identities.connect(admin).revokeIdentity(coSigner2.address))
+      .to.be.revertedWithCustomError(identities, "EnforcedPause");
+
+    await expect(identities.connect(coSigner2).approveRevokeIdentity(proposalId))
+      .to.be.revertedWithCustomError(identities, "EnforcedPause");
+
+    await expect(identities.connect(user).updateMetadata("ipfs://blocked"))
+      .to.be.revertedWithCustomError(identities, "EnforcedPause");
+
+    // AssetNFT has its own, separate pause state - unaffected by IdentityRegistry's.
+    await expect(assets.connect(manager).mintAsset(user.address, "ipfs://still-works"))
+      .to.emit(assets, "AssetMinted");
+
+    // Nothing moved: the pending revoke proposal never executed.
+    expect((await identities.getIdentity(user.address)).active).to.equal(true);
+
+    await identities.connect(admin).unpause();
+    expect(await identities.paused()).to.equal(false);
+
+    // The exact same operations now succeed normally.
+    await expect(
+      identities.connect(admin).registerIdentity(coSigner2.address, "did:ethr:0xFreshPause", "ipfs://fresh-pause", freshSig)
+    ).to.emit(identities, "IdentityRegistered");
+
+    await expect(identities.connect(user).updateMetadata("ipfs://unblocked"))
+      .to.emit(identities, "IdentityMetadataUpdated");
+
+    await expect(identities.connect(coSigner2).approveRevokeIdentity(proposalId))
+      .to.emit(identities, "IdentityRevoked")
+      .withArgs(user.address);
+  });
+
   it("does not execute a proposal on a single co-signer's call, and rejects the proposer approving their own proposal again", async function () {
     const { admin, coSigner2, coSigner3, user, identities, approvalRegistry } = await deployPlatform();
 

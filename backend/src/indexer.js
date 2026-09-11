@@ -63,7 +63,9 @@ const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000;
 
 const identityAbi = [
   "event IdentityRegistered(address indexed account, string did, string metadataURI)",
-  "event IdentityRevoked(address indexed account)"
+  "event IdentityRevoked(address indexed account)",
+  "event IdentityRegistryPaused(address indexed admin)",
+  "event IdentityRegistryUnpaused(address indexed admin)"
 ];
 const assetAbi = [
   "event AssetMinted(uint256 indexed tokenId, address indexed owner, string uri)",
@@ -100,6 +102,18 @@ function attachListeners(identityContract, assetContract, approvalContract) {
     record("IdentityRevoked", { account }, event.log);
     persistNow();
     console.log("Identity revoked:", account);
+  });
+
+  identityContract.on("IdentityRegistryPaused", (admin, event) => {
+    record("IdentityRegistryPaused", { account: admin }, event.log);
+    persistNow();
+    console.log("Identity registry paused by:", admin);
+  });
+
+  identityContract.on("IdentityRegistryUnpaused", (admin, event) => {
+    record("IdentityRegistryUnpaused", { account: admin }, event.log);
+    persistNow();
+    console.log("Identity registry unpaused by:", admin);
   });
 
   assetContract.on("AssetMinted", (tokenId, owner, uri, event) => {
@@ -190,6 +204,12 @@ async function catchUpAll(identityContract, assetContract, approvalContract, fro
   }));
   caught += await catchUpEvent(identityContract, "IdentityRevoked", fromBlock, toBlock, (args) => ({
     account: args.account
+  }));
+  caught += await catchUpEvent(identityContract, "IdentityRegistryPaused", fromBlock, toBlock, (args) => ({
+    account: args.admin
+  }));
+  caught += await catchUpEvent(identityContract, "IdentityRegistryUnpaused", fromBlock, toBlock, (args) => ({
+    account: args.admin
   }));
   caught += await catchUpEvent(assetContract, "AssetMinted", fromBlock, toBlock, (args) => ({
     tokenId: args.tokenId.toString(),
