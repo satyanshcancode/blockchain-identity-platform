@@ -9,6 +9,7 @@ function roleLabels(roles) {
   if (roles.isManager) labels.push("Manager");
   if (roles.isAuditor) labels.push("Auditor");
   if (roles.isUser) labels.push("User");
+  if (roles.isCoSigner) labels.push("Co-signer");
   return labels;
 }
 

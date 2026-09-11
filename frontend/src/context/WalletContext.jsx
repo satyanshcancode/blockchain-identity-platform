@@ -3,7 +3,7 @@ import { connectWallet as connectWalletService, getRoleRegistry, getRolesForAddr
 
 const WalletContext = createContext(null);
 
-const EMPTY_ROLES = { isAdmin: false, isManager: false, isAuditor: false, isUser: false };
+const EMPTY_ROLES = { isAdmin: false, isManager: false, isAuditor: false, isUser: false, isCoSigner: false };
 
 export function WalletProvider({ children }) {
   const [address, setAddress] = useState(null);
