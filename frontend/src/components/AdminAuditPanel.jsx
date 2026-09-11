@@ -201,16 +201,27 @@ export default function AdminAuditPanel() {
       return;
     }
     setRegBusy(true);
+    // The write and the follow-up audit-log refresh are deliberately in
+    // separate try/catch blocks: registerIdentity() succeeding and
+    // loadAuditLog() then failing (a transient network blip, say) are two
+    // different outcomes and shouldn't collapse into one "it failed"
+    // message when the identity was, in fact, registered.
     try {
       await registerIdentity(signer, regAccount, regDid, regUri, regSignature);
-      setRegStatus(`Identity registered for ${regAccount}.`);
-      setRegAccount("");
-      setRegDid("");
-      setRegUri("");
-      setRegSignature("");
-      await loadAuditLog();
     } catch (err) {
       setError(err.message);
+      setRegBusy(false);
+      return;
+    }
+    setRegStatus(`Identity registered for ${regAccount}.`);
+    setRegAccount("");
+    setRegDid("");
+    setRegUri("");
+    setRegSignature("");
+    try {
+      await loadAuditLog();
+    } catch (err) {
+      setError(`Identity registered, but refreshing the audit log failed - click refresh. (${err.message})`);
     } finally {
       setRegBusy(false);
     }
@@ -227,14 +238,20 @@ export default function AdminAuditPanel() {
     setRevokeBusy(true);
     try {
       await revokeIdentity(signer, revokeAddress);
-      setRevokeStatus(
-        `Proposed revoking ${revokeAddress} - needs one more co-signer's approval below before it takes effect.`
-      );
-      setRevokeAddress("");
+    } catch (err) {
+      setError(err.message);
+      setRevokeBusy(false);
+      return;
+    }
+    setRevokeStatus(
+      `Proposed revoking ${revokeAddress} - needs one more co-signer's approval below before it takes effect.`
+    );
+    setRevokeAddress("");
+    try {
       await loadAuditLog();
       await loadPendingApprovals();
     } catch (err) {
-      setError(err.message);
+      setError(`Revoke proposed, but refreshing the view failed - click refresh. (${err.message})`);
     } finally {
       setRevokeBusy(false);
     }
@@ -251,15 +268,21 @@ export default function AdminAuditPanel() {
     setReclaimBusy(true);
     try {
       await reclaimAsset(signer, reclaimTokenId, reclaimNewOwner);
-      setReclaimStatus(
-        `Proposed reclaiming #${reclaimTokenId} to ${reclaimNewOwner} - needs one more co-signer's approval below before it takes effect.`
-      );
-      setReclaimTokenId("");
-      setReclaimNewOwner("");
+    } catch (err) {
+      setError(err.message);
+      setReclaimBusy(false);
+      return;
+    }
+    setReclaimStatus(
+      `Proposed reclaiming #${reclaimTokenId} to ${reclaimNewOwner} - needs one more co-signer's approval below before it takes effect.`
+    );
+    setReclaimTokenId("");
+    setReclaimNewOwner("");
+    try {
       await loadAuditLog();
       await loadPendingApprovals();
     } catch (err) {
-      setError(err.message);
+      setError(`Reclaim proposed, but refreshing the view failed - click refresh. (${err.message})`);
     } finally {
       setReclaimBusy(false);
     }
@@ -275,11 +298,17 @@ export default function AdminAuditPanel() {
       } else {
         await approveReclaimAsset(signer, proposal.proposalId);
       }
-      setApproveStatus(`Approved proposal #${proposal.proposalId}.`);
+    } catch (err) {
+      setError(err.message);
+      setApproveBusyId(null);
+      return;
+    }
+    setApproveStatus(`Approved proposal #${proposal.proposalId}.`);
+    try {
       await loadPendingApprovals();
       await loadAuditLog();
     } catch (err) {
-      setError(err.message);
+      setError(`Approval succeeded, but refreshing the view failed - click refresh. (${err.message})`);
     } finally {
       setApproveBusyId(null);
     }
@@ -296,9 +325,15 @@ export default function AdminAuditPanel() {
     setError(null);
     try {
       await acknowledgeAnomaly(anomaly.id, signer, address);
-      await loadAnomalies();
     } catch (err) {
       setError(err.message);
+      setAckBusyId(null);
+      return;
+    }
+    try {
+      await loadAnomalies();
+    } catch (err) {
+      setError(`Anomaly acknowledged, but refreshing the list failed - click Refresh above. (${err.message})`);
     } finally {
       setAckBusyId(null);
     }
@@ -350,8 +385,19 @@ export default function AdminAuditPanel() {
       }
     }
 
-    await loadPaused();
-    await loadAuditLog();
+    // Split from the write loop above so a failure here (a transient
+    // network blip while re-reading the chain) can't throw out of the
+    // whole handler uncaught - which would leave pauseBusy stuck on
+    // "Working..." forever and never report anything, even though the
+    // pause/resume step(s) above may have already succeeded.
+    try {
+      await loadPaused();
+      await loadAuditLog();
+    } catch (err) {
+      if (!failedAt) {
+        setError(`Pause state updated, but refreshing the view failed - click refresh. (${err.message})`);
+      }
+    }
     setPauseStatus(
       failedAt
         ? null
