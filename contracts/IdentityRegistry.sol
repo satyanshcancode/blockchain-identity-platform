@@ -113,6 +113,16 @@ contract IdentityRegistry is EIP712, Pausable {
         string calldata metadataURI,
         bytes calldata signature
     ) external onlyAdmin whenNotPaused {
+        // Cheap, authoritative floor against a blank identity - just a
+        // calldata length check, no loop, so it costs nothing worth
+        // measuring. Doesn't catch a whitespace-only DID (e.g. " ") -
+        // that would need iterating every byte, real gas for what's a
+        // data-hygiene concern rather than an on-chain invariant, so that
+        // stricter check is left to the two client entry points instead
+        // (IdentityCard.jsx's "Generate signature" form, where the DID is
+        // actually chosen, and AdminAuditPanel.jsx's submission form).
+        require(bytes(did).length > 0, "DID required");
+
         uint256 nonce = nonces[account];
         bytes32 structHash = keccak256(
             abi.encode(

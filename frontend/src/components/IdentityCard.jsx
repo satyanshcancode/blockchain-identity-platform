@@ -50,8 +50,15 @@ export default function IdentityCard() {
 
   const handleSign = async (e) => {
     e.preventDefault();
-    setRegBusy(true);
     setError(null);
+    // HTML's `required` only blocks a totally empty field - typing just a
+    // space satisfies it, which would then get signed and submitted as a
+    // blank identity. Catching it here means it's never even signed.
+    if (!regDid.trim()) {
+      setError("DID cannot be empty or just whitespace.");
+      return;
+    }
+    setRegBusy(true);
     try {
       setRegResult(await signRegistration(signer, { did: regDid, metadataURI: regUri }));
     } catch (err) {

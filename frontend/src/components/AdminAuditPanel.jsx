@@ -193,6 +193,13 @@ export default function AdminAuditPanel() {
       setError("Enter a valid account address (0x followed by 40 hex characters).");
       return;
     }
+    // Also enforced on-chain (registerIdentity reverts on an empty DID) and
+    // at the signing step in IdentityCard.jsx - this catches an admin's own
+    // typo before spending a transaction on a signature mismatch.
+    if (!regDid.trim()) {
+      setError("DID cannot be empty or just whitespace.");
+      return;
+    }
     setRegBusy(true);
     try {
       await registerIdentity(signer, regAccount, regDid, regUri, regSignature);
