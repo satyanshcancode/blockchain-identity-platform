@@ -21,6 +21,26 @@ const RAPID_ADMIN_ACTION_WINDOW_MS = 5 * 60 * 1000;
 const UNAPPROVED_PROPOSAL_THRESHOLD_COUNT = 2;
 const UNAPPROVED_PROPOSAL_WINDOW_MS = 5 * 60 * 1000;
 
+// A stable, deterministic id for one flagged anomaly, derived from exactly
+// which persisted events triggered it - not just "this rule fired for this
+// address," which would be too coarse: acknowledging that would suppress
+// every future recurrence of the rule for that address forever, including
+// ones involving entirely different events. Sorting the event ids makes the
+// id independent of the (irrelevant) order events happen to be collected in.
+//
+// A deliberate consequence for the two "burst" rules (rapid mint, rapid
+// admin action), which report only the latest qualifying window per key:
+// one more matching event shifts that window and changes which events are
+// in it, which changes this id - so an acknowledged burst reappears as a
+// new, unreviewed alert the moment it grows. That's intentional, not a bug -
+// see the design discussion in the commit that added acknowledgement: the
+// alternative (key off rule+address only) would let a burst quietly grow
+// far past its original, already-dismissed size without ever resurfacing.
+function computeAnomalyId(rule, events) {
+  const ids = events.map((e) => e.id).sort((a, b) => a - b);
+  return `${rule}:${ids.join(",")}`;
+}
+
 function formatDuration(ms) {
   if (ms < 60000) return `${Math.round(ms / 1000)}s`;
   const minutes = ms / 60000;
@@ -71,6 +91,7 @@ function detectRapidMintBursts(events) {
   const mints = events.filter((e) => e.type === "AssetMinted");
   const bursts = findBursts(mints, (e) => e.owner, RAPID_MINT_WINDOW_MS, RAPID_MINT_THRESHOLD_COUNT);
   return bursts.map(({ key: recipient, events: burstEvents }) => ({
+    id: computeAnomalyId("rapid-mint-burst", burstEvents),
     rule: "rapid-mint-burst",
     ruleLabel: "Rapid mint burst (same recipient)",
     addresses: [recipient],
@@ -109,6 +130,7 @@ function detectMintThenImmediateTransfer(events) {
     if (gapMs > MINT_TRANSFER_WINDOW_MS) continue;
 
     anomalies.push({
+      id: computeAnomalyId("mint-then-immediate-transfer", [mint, firstTransfer]),
       rule: "mint-then-immediate-transfer",
       ruleLabel: "Mint then immediate transfer",
       addresses: [mint.owner, firstTransfer.to],
@@ -142,6 +164,7 @@ function detectRapidAdminActionBursts(events) {
 
   const bursts = findBursts(adminActions, (e) => e.actor, RAPID_ADMIN_ACTION_WINDOW_MS, RAPID_ADMIN_ACTION_THRESHOLD_COUNT);
   return bursts.map(({ key: actor, events: burstEvents }) => ({
+    id: computeAnomalyId("rapid-admin-action-burst", burstEvents),
     rule: "rapid-admin-action-burst",
     ruleLabel: "Rapid admin action burst",
     addresses: [actor],
@@ -176,6 +199,7 @@ function detectUnapprovedProposalBacklog(events, now) {
   for (const [proposer, proposals] of byProposer) {
     if (proposals.length <= UNAPPROVED_PROPOSAL_THRESHOLD_COUNT) continue;
     anomalies.push({
+      id: computeAnomalyId("unapproved-proposal-backlog", proposals),
       rule: "unapproved-proposal-backlog",
       ruleLabel: "Unapproved proposal backlog",
       addresses: [proposer],

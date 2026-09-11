@@ -22,13 +22,17 @@ async function request(path) {
 // just failing: signing triggers a MetaMask popup the user sees and can
 // act on. A 403 never retries - signing again as the same address can't
 // change which role it holds.
-async function requestAuthed(path, signer, address) {
+async function requestAuthed(path, signer, address, { method = "GET", body: requestBody } = {}) {
   if (!signer || !address) {
     throw new Error("Connect your wallet to view this data.");
   }
   for (let attempt = 0; attempt < 2; attempt++) {
     const headers = await getApiAuthHeaders(signer, address, { forceRefresh: attempt > 0 });
-    const res = await fetch(`${API_URL}${path}`, { headers });
+    const res = await fetch(`${API_URL}${path}`, {
+      method,
+      headers: requestBody ? { ...headers, "Content-Type": "application/json" } : headers,
+      body: requestBody ? JSON.stringify(requestBody) : undefined
+    });
     if (res.ok) return res.json();
     const body = await res.json().catch(() => ({}));
     if (res.status === 401 && attempt === 0) {
@@ -50,3 +54,5 @@ export const getAnomalies = (signer, address) => requestAuthed("/api/audit/anoma
 export const getComplianceRecord = (targetAddress, signer, callerAddress) =>
   requestAuthed(`/api/identity/${targetAddress}/compliance`, signer, callerAddress);
 export const getPendingApprovals = (signer, address) => requestAuthed("/api/approvals/pending", signer, address);
+export const acknowledgeAnomaly = (anomalyId, signer, address) =>
+  requestAuthed("/api/audit/anomalies/acknowledge", signer, address, { method: "POST", body: { anomalyId } });

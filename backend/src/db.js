@@ -47,6 +47,22 @@ async function initDb() {
       value TEXT NOT NULL
     );
   `);
+  // Anomalies (see anomalyDetector.js) are computed fresh from the event log
+  // on every request, not stored - so "dismissing" one can't mean deleting a
+  // row, there isn't one. Instead this records who reviewed which anomaly ID
+  // and when; routes/audit.js overlays this onto each freshly-computed
+  // anomaly rather than filtering server-side, so the frontend can still
+  // show reviewed ones on request. anomaly_id is the detector's deterministic
+  // id (rule + the exact event ids that triggered it - see
+  // anomalyDetector.js's computeAnomalyId), so re-acknowledging the same
+  // anomaly is just an upsert, not a new row.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS anomaly_acknowledgements (
+      anomaly_id TEXT PRIMARY KEY,
+      acknowledged_by TEXT NOT NULL,
+      acknowledged_at INTEGER NOT NULL
+    );
+  `);
 
   persistNow();
   return db;
@@ -87,7 +103,11 @@ function insertEvent({ type, tokenId, account, from, to, payload, blockNumber, t
 // change where they get the array from, not how they read it.
 function rowToEntry(row) {
   const payload = JSON.parse(row.payload || "{}");
-  const base = { type: row.type, ts: row.ts };
+  // id is the event's permanent row id - exposed so anomalyDetector.js can
+  // derive a stable anomaly id from exactly which events triggered a rule
+  // (see computeAnomalyId there). Every other consumer of getAllEvents()
+  // already ignores fields it doesn't use, so this is purely additive.
+  const base = { id: row.id, type: row.type, ts: row.ts };
   switch (row.type) {
     case "IdentityRegistered":
       return { ...base, account: row.account, did: payload.did, uri: payload.uri };
@@ -174,6 +194,35 @@ function resetProcessedBlock(blockNumber) {
   setLastProcessedBlock(blockNumber);
 }
 
+// Upsert: acknowledging an already-acknowledged anomaly just updates who/when
+// most recently confirmed it, rather than erroring - a harmless double-click
+// (or a second reviewer re-confirming) shouldn't need special handling.
+function acknowledgeAnomaly(anomalyId, acknowledgedBy, acknowledgedAt) {
+  assertReady();
+  db.run(
+    `INSERT INTO anomaly_acknowledgements (anomaly_id, acknowledged_by, acknowledged_at)
+       VALUES (?, ?, ?)
+     ON CONFLICT(anomaly_id) DO UPDATE SET acknowledged_by = excluded.acknowledged_by, acknowledged_at = excluded.acknowledged_at`,
+    [anomalyId, acknowledgedBy, acknowledgedAt]
+  );
+  persistNow();
+}
+
+// Returns every acknowledgement as a Map keyed by anomaly_id, for
+// routes/audit.js to overlay onto freshly-computed anomalies in one pass
+// rather than querying per-anomaly.
+function getAnomalyAcknowledgements() {
+  assertReady();
+  const map = new Map();
+  const stmt = db.prepare("SELECT * FROM anomaly_acknowledgements");
+  while (stmt.step()) {
+    const row = stmt.getAsObject();
+    map.set(row.anomaly_id, { acknowledgedBy: row.acknowledged_by, acknowledgedAt: row.acknowledged_at });
+  }
+  stmt.free();
+  return map;
+}
+
 // Writes to a temp file and renames it over DB_PATH rather than writing
 // DB_PATH directly. fs.writeFileSync(DB_PATH, ...) would rewrite the whole
 // file in place; a crash mid-write (kill -9, power loss - not a clean
@@ -195,5 +244,7 @@ module.exports = {
   getLastProcessedBlock,
   markProcessedThrough,
   resetProcessedBlock,
-  persistNow
+  persistNow,
+  acknowledgeAnomaly,
+  getAnomalyAcknowledgements
 };

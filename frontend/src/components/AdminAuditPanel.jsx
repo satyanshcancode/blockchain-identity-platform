@@ -1,6 +1,13 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useWallet } from "../context/WalletContext";
-import { getAuditLog, getAssetHistory, getComplianceRecord, getPendingApprovals, getAnomalies } from "../services/api";
+import {
+  getAuditLog,
+  getAssetHistory,
+  getComplianceRecord,
+  getPendingApprovals,
+  getAnomalies,
+  acknowledgeAnomaly
+} from "../services/api";
 import {
   registerIdentity,
   revokeIdentity,
@@ -53,6 +60,8 @@ export default function AdminAuditPanel() {
 
   const [anomalies, setAnomalies] = useState([]);
   const [anomaliesLoading, setAnomaliesLoading] = useState(false);
+  const [showReviewed, setShowReviewed] = useState(false);
+  const [ackBusyId, setAckBusyId] = useState(null);
 
   const [regAccount, setRegAccount] = useState("");
   const [regDid, setRegDid] = useState("");
@@ -248,6 +257,25 @@ export default function AdminAuditPanel() {
     }
   };
 
+  // Acknowledging never deletes or alters an anomaly - it records that this
+  // wallet reviewed it (see backend/src/routes/audit.js), and the backend
+  // re-annotates it as acknowledged on the next fetch. Re-fetching (rather
+  // than optimistically flipping local state) is deliberate: it's the same
+  // roundtrip that would happen anyway, and it means the count/list can
+  // never drift from what's actually persisted.
+  const handleAcknowledge = async (anomaly) => {
+    setAckBusyId(anomaly.id);
+    setError(null);
+    try {
+      await acknowledgeAnomaly(anomaly.id, signer, address);
+      await loadAnomalies();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAckBusyId(null);
+    }
+  };
+
   // Drives BOTH independent pause states toward one target (true = pause
   // everything, false = resume everything) as two sequential transactions -
   // skipping whichever contract is already at the target state, so clicking
@@ -342,34 +370,65 @@ export default function AdminAuditPanel() {
         );
       })()}
 
-      <section style={anomalies.length > 0 ? styles.pausedBanner : styles.activeBanner}>
-        <div style={styles.pausedBannerTitle}>
-          {anomalies.length > 0
-            ? `⚠️ ${anomalies.length} anomaly alert${anomalies.length === 1 ? "" : "s"}`
-            : "✅ No anomalies detected"}
-        </div>
-        <p style={{ margin: "4px 0 8px" }}>
-          Rule-based checks over the audit log - fixed thresholds (rapid mint bursts,
-          mint-then-immediate-transfer, rapid admin action bursts, unapproved proposal
-          backlogs), not AI/ML.
-        </p>
-        <button onClick={loadAnomalies} disabled={anomaliesLoading}>
-          {anomaliesLoading ? "Scanning..." : "Refresh"}
-        </button>
-        {anomalies.length > 0 && (
-          <ul style={{ marginTop: 12 }}>
-            {anomalies.map((a, i) => (
-              <li key={i} style={{ marginBottom: 12 }}>
-                <strong>{a.ruleLabel}</strong>
-                <p style={{ margin: "4px 0" }}>{a.description}</p>
-                <div style={styles.small}>
-                  {a.events.length} event(s) involved — {a.addresses.join(", ")}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {(() => {
+        const unreviewed = anomalies.filter((a) => !a.acknowledged);
+        const reviewed = anomalies.filter((a) => a.acknowledged);
+        return (
+          <section style={unreviewed.length > 0 ? styles.pausedBanner : styles.activeBanner}>
+            <div style={styles.pausedBannerTitle}>
+              {unreviewed.length > 0
+                ? `⚠️ ${unreviewed.length} anomaly alert${unreviewed.length === 1 ? "" : "s"}`
+                : "✅ No anomalies detected"}
+            </div>
+            <p style={{ margin: "4px 0 8px" }}>
+              Rule-based checks over the audit log - fixed thresholds (rapid mint bursts,
+              mint-then-immediate-transfer, rapid admin action bursts, unapproved proposal
+              backlogs), not AI/ML. Marking one reviewed doesn't erase it - it's recorded who
+              reviewed it and when, not deleted.
+            </p>
+            <button onClick={loadAnomalies} disabled={anomaliesLoading}>
+              {anomaliesLoading ? "Scanning..." : "Refresh"}
+            </button>{" "}
+            {reviewed.length > 0 && (
+              <button onClick={() => setShowReviewed((v) => !v)}>
+                {showReviewed ? "Hide reviewed alerts" : `Show ${reviewed.length} reviewed alert${reviewed.length === 1 ? "" : "s"}`}
+              </button>
+            )}
+            {unreviewed.length > 0 && (
+              <ul style={{ marginTop: 12 }}>
+                {unreviewed.map((a) => (
+                  <li key={a.id} style={{ marginBottom: 12 }}>
+                    <strong>{a.ruleLabel}</strong>
+                    <p style={{ margin: "4px 0" }}>{a.description}</p>
+                    <div style={styles.small}>
+                      {a.events.length} event(s) involved — {a.addresses.join(", ")}
+                    </div>
+                    <button onClick={() => handleAcknowledge(a)} disabled={ackBusyId === a.id}>
+                      {ackBusyId === a.id ? "Marking..." : "Mark as reviewed"}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {showReviewed && reviewed.length > 0 && (
+              <ul style={{ marginTop: 12 }}>
+                {reviewed.map((a) => (
+                  <li key={a.id} style={{ marginBottom: 12, opacity: 0.75 }}>
+                    <strong>{a.ruleLabel}</strong>
+                    <p style={{ margin: "4px 0" }}>{a.description}</p>
+                    <div style={styles.small}>
+                      {a.events.length} event(s) involved — {a.addresses.join(", ")}
+                    </div>
+                    <div style={styles.small}>
+                      ✓ Reviewed by {a.acknowledgedBy} at {new Date(a.acknowledgedAt).toLocaleString()}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        );
+      })()}
 
       <section style={section}>
         <h3>Audit log</h3>
