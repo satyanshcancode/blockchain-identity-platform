@@ -11,6 +11,20 @@ export const APPROVAL_REGISTRY_ADDRESS = process.env.REACT_APP_APPROVAL_REGISTRY
 export const IDENTITY_REGISTRY_ADDRESS = process.env.REACT_APP_IDENTITY_REGISTRY_ADDRESS || "";
 export const ASSET_NFT_ADDRESS = process.env.REACT_APP_ASSET_NFT_ADDRESS || "";
 
+// Domain/types/purpose here MUST exactly match backend/src/auth/apiAuth.js -
+// see that file for why this is a separate EIP-712 domain from
+// IdentityRegistry's RegisterIdentity signing (distinct purpose, distinct
+// verifyingContract), not a reuse of it.
+const API_AUTH_DOMAIN_NAME = "PlatformApiAuth";
+const API_AUTH_DOMAIN_VERSION = "1";
+const API_AUTH_PURPOSE = "Authenticate to the platform API";
+const API_AUTH_TYPES = {
+  ApiAuth: [
+    { name: "purpose", type: "string" },
+    { name: "issuedAt", type: "uint256" }
+  ]
+};
+
 const ROLE_REGISTRY_ABI = [
   "function ADMIN_ROLE() view returns (bytes32)",
   "function MANAGER_ROLE() view returns (bytes32)",
@@ -57,6 +71,27 @@ export async function connectWallet() {
   const address = await signer.getAddress();
   const network = await provider.getNetwork();
   return { provider, signer, address, chainId: Number(network.chainId) };
+}
+
+// Proves to the backend that this wallet controls `signer`'s address, so
+// role-gated API routes (audit log, compliance records, anomalies, pending
+// approvals - see backend/src/auth/apiAuth.js) can check THAT address's
+// on-chain role instead of trusting the backend's own configured key.
+// issuedAt is part of the signed payload so the backend can bound how long
+// this stays valid without needing a persisted nonce - see
+// API_AUTH_VALIDITY_MS there. Rejects with ethers' own ACTION_REJECTED
+// error if the user declines the MetaMask prompt; callers surface that as-is.
+export async function signApiAuth(signer) {
+  const network = await signer.provider.getNetwork();
+  const domain = {
+    name: API_AUTH_DOMAIN_NAME,
+    version: API_AUTH_DOMAIN_VERSION,
+    chainId: Number(network.chainId),
+    verifyingContract: ROLE_REGISTRY_ADDRESS
+  };
+  const issuedAt = Date.now();
+  const signature = await signer.signTypedData(domain, API_AUTH_TYPES, { purpose: API_AUTH_PURPOSE, issuedAt });
+  return { issuedAt, signature };
 }
 
 export function getRoleRegistry(signerOrProvider) {

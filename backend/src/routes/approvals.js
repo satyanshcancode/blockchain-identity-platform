@@ -1,6 +1,7 @@
 const express = require("express");
 const { ethers } = require("ethers");
 const { getAllEvents } = require("../db");
+const { requireRole } = require("../auth/apiAuth");
 
 const router = express.Router();
 
@@ -14,10 +15,14 @@ function getProvider() {
   return new ethers.JsonRpcProvider(process.env.RPC_URL);
 }
 
-// getProposal() has no on-chain access restriction (proposals are about to
-// become public via events anyway, and co-signers need to see them to decide
-// whether to approve) - no privileged signer needed, unlike
-// assets.js/identity.js's auditor/admin-gated reads.
+// getProposal() itself has no on-chain access restriction (proposals are
+// about to become public via events anyway), so unlike assets.js/
+// identity.js's privileged reads, fetching the data needs no special
+// signer - a plain read-only provider is enough. The route below is still
+// caller-gated at the HTTP layer via requireRole() (see ../auth/apiAuth.js):
+// auditors need this for compliance review, co-signers need it to decide
+// what to approve, and the actual approve action stays separately gated
+// on-chain by onlyCoSigner regardless of who can merely read this list.
 function getApprovalContract() {
   return new ethers.Contract(process.env.APPROVAL_REGISTRY_ADDRESS, APPROVAL_ABI, getProvider());
 }
@@ -50,8 +55,10 @@ function decodeActionData(actionType, data) {
 
 // GET /api/approvals/pending - every not-yet-executed proposal (revokeIdentity
 // or reclaimAsset awaiting its second co-signer approval), decoded into
-// human-readable fields.
-router.get("/pending", async (req, res) => {
+// human-readable fields. Auditor/co-signer/admin - see the note above
+// getApprovalContract() for why auditor is read-only-equivalent here (the
+// approve action itself is unaffected, still onlyCoSigner on-chain).
+router.get("/pending", requireRole("AUDITOR", "CO_SIGNER", "ADMIN"), async (req, res) => {
   try {
     const contract = getApprovalContract();
     const ids = knownProposalIds();

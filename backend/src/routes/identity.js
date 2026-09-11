@@ -1,6 +1,7 @@
 const express = require("express");
 const { ethers } = require("ethers");
 const { resolveDID } = require("../did/didResolver");
+const { requireRole } = require("../auth/apiAuth");
 
 const router = express.Router();
 
@@ -12,10 +13,16 @@ function getProvider() {
   return new ethers.JsonRpcProvider(process.env.RPC_URL);
 }
 
-// getComplianceRecord() is gated on-chain by onlyAuditorOrAdmin, same reasoning
-// as assets.js's getPrivilegedContract(): a plain read-only provider resolves
-// msg.sender to the zero address and reverts, so this needs a real signer
-// holding AUDITOR_ROLE or ADMIN_ROLE.
+// Two separate gates stack on the route below: requireRole() (see
+// ../auth/apiAuth.js) checks that the actual HTTP CALLER controls an
+// address holding AUDITOR_ROLE/ADMIN_ROLE, via a signature they produce
+// with their own wallet. Independently, getComplianceRecord() is ALSO
+// gated on-chain by onlyAuditorOrAdmin - a plain read-only provider
+// resolves msg.sender to the zero address and reverts, so fetching the
+// data itself still needs a real signer holding one of those roles. That
+// signer is the backend's own configured key, same as before - it isn't
+// what authenticates the caller (requireRole() is), it's just how the
+// backend is allowed to read this particular on-chain data at all.
 function getPrivilegedContract() {
   if (!process.env.PRIVATE_KEY) {
     throw new Error("PRIVATE_KEY not configured on the backend — required for auditor-only reads");
@@ -38,9 +45,9 @@ router.get("/:address", async (req, res) => {
 });
 
 // GET /api/identity/:address/compliance — Auditor/Admin-only registration/
-// revocation history. Enforced on-chain by IdentityRegistry.getComplianceRecord's
-// onlyAuditorOrAdmin modifier; mirrors assets.js's /:tokenId/history route.
-router.get("/:address/compliance", async (req, res) => {
+// revocation history. Caller-authenticated by requireRole() (see the note
+// above getPrivilegedContract()).
+router.get("/:address/compliance", requireRole("AUDITOR", "ADMIN"), async (req, res) => {
   try {
     const contract = getPrivilegedContract();
     const record = await contract.getComplianceRecord(req.params.address);

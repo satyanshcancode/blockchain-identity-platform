@@ -20,6 +20,11 @@ services:
     environment:
       - PORT=4000
       - RPC_URL=http://hardhat-node:8545
+      # Browser requests to the API are only accepted from this origin (see
+      # src/index.js's cors() setup) - the address the browser actually
+      # loads the frontend from, i.e. the host-mapped port below, not the
+      # frontend container's internal one.
+      - FRONTEND_ORIGIN=http://localhost:3000
       # Persistent home for the indexer's SQLite (sql.js) event store - see
       # backend/src/db.js. Backed by the event-db volume below so it survives
       # `docker compose down`/`up`, not just an in-session container restart.

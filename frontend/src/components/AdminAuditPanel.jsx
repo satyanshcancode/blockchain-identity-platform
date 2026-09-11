@@ -71,10 +71,11 @@ export default function AdminAuditPanel() {
   const [reclaimStatus, setReclaimStatus] = useState(null);
 
   const loadAuditLog = async () => {
+    if (!signer || !address) return;
     setAuditLoading(true);
     setError(null);
     try {
-      setAuditLog(await getAuditLog());
+      setAuditLog(await getAuditLog(signer, address));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -96,14 +97,15 @@ export default function AdminAuditPanel() {
   // Which pending proposals the CONNECTED wallet has already approved - the
   // backend's list doesn't include this (it's per-viewer, not indexed audit
   // data), so it's fetched live via the same on-chain-read-through-the-
-  // connected-wallet exception role checks and getAssetsPaused()/getIdentityPaused()
-  // already use. Only
-  // bothers making those calls for a co-signer, since only a co-signer could
-  // ever see the Approve button anyway.
+  // connected-wallet exception role checks and getAssetsPaused()/
+  // getIdentityPaused() already use. Only bothers making those calls for a
+  // co-signer, since only a co-signer could ever see the Approve button
+  // anyway.
   const loadPendingApprovals = useCallback(async () => {
+    if (!signer || !address) return;
     setPendingLoading(true);
     try {
-      const list = await getPendingApprovals();
+      const list = await getPendingApprovals(signer, address);
       setPendingApprovals(list);
       if (roles.isCoSigner && address) {
         const flags = await Promise.all(list.map((p) => hasApproved(signer, p.proposalId, address)));
@@ -119,15 +121,16 @@ export default function AdminAuditPanel() {
   }, [roles.isCoSigner, address, signer]);
 
   const loadAnomalies = useCallback(async () => {
+    if (!signer || !address) return;
     setAnomaliesLoading(true);
     try {
-      setAnomalies(await getAnomalies());
+      setAnomalies(await getAnomalies(signer, address));
     } catch (err) {
       setError(err.message);
     } finally {
       setAnomaliesLoading(false);
     }
-  }, []);
+  }, [signer, address]);
 
   useEffect(() => {
     loadAuditLog();
@@ -156,7 +159,7 @@ export default function AdminAuditPanel() {
     setComplianceBusy(true);
     setError(null);
     try {
-      setCompliance(await getComplianceRecord(complianceAddress));
+      setCompliance(await getComplianceRecord(complianceAddress, signer, address));
     } catch (err) {
       setError(err.message);
     } finally {

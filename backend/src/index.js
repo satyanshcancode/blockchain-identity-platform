@@ -20,7 +20,11 @@ async function main() {
   const approvalRoutes = require("./routes/approvals");
 
   const app = express();
-  app.use(cors());
+  // Wide-open CORS meant any website could read this API's responses from
+  // a visitor's browser. Restricted to the frontend's own origin - the
+  // only legitimate caller, including VerifyPage (served from the same
+  // origin regardless of which page within the app a visitor is on).
+  app.use(cors({ origin: process.env.FRONTEND_ORIGIN || "http://localhost:3000" }));
   app.use(express.json());
 
   app.get("/health", (req, res) => res.json({ status: "ok" }));

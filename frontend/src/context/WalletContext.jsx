@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { connectWallet as connectWalletService, getRoleRegistry, getRolesForAddress } from "../services/contractService";
+import { clearApiAuthCache } from "../services/apiAuth";
 
 const WalletContext = createContext(null);
 
@@ -36,6 +37,10 @@ export function WalletProvider({ children }) {
     setProvider(null);
     setChainId(null);
     setRoles(EMPTY_ROLES);
+    // A cached API-auth signature (see services/apiAuth.js) proves control of
+    // a specific address - drop it on disconnect so nothing could later be
+    // sent under a session the user explicitly ended.
+    clearApiAuthCache();
   }, []);
 
   // MetaMask already remembers this site's permission grant, so calling this
