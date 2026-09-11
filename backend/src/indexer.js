@@ -80,74 +80,101 @@ const approvalAbi = [
   "event ActionExecuted(uint256 indexed proposalId)"
 ];
 
-function record(type, fields, log) {
+// block.timestamp never changes once mined, so caching it by block number is
+// safe indefinitely - avoids an extra eth_getBlockByNumber round-trip for
+// every event when a catch-up/backfill scan replays many events that share
+// a handful of blocks (a single-transaction batch, or several events mined
+// close together).
+const blockTimestampCache = new Map();
+
+async function getBlockTimestampMs(blockNumber) {
+  if (blockTimestampCache.has(blockNumber)) return blockTimestampCache.get(blockNumber);
+  const block = await provider.getBlock(blockNumber);
+  const ts = Number(block.timestamp) * 1000;
+  blockTimestampCache.set(blockNumber, ts);
+  return ts;
+}
+
+// Stores the event's REAL on-chain block timestamp, not the moment this
+// process happened to index it. The two are indistinguishable for a live
+// event (mined moments ago), but diverge sharply for a catch-up/backfill
+// replay: without this, replaying an hour's worth of history in the few
+// seconds after a restart would stamp every one of those events with
+// "now," making them look like they all happened in the same instant. The
+// anomaly detector's time-window rules (backend/src/anomalyDetector.js) key
+// entirely off this timestamp, so that would turn perfectly ordinary,
+// spaced-out historical activity into a wall of false "rapid burst" flags
+// on every cold start with more than a threshold's worth of events to
+// replay. Using the real mined time keeps replayed events at their actual
+// original spacing, so the rules only fire for genuinely fast activity.
+async function record(type, fields, log) {
   insertEvent({
     type,
     ...fields,
     blockNumber: log.blockNumber,
     txHash: log.transactionHash,
     logIndex: log.index,
-    ts: Date.now()
+    ts: await getBlockTimestampMs(log.blockNumber)
   });
 }
 
 function attachListeners(identityContract, assetContract, approvalContract) {
-  identityContract.on("IdentityRegistered", (account, did, uri, event) => {
-    record("IdentityRegistered", { account, payload: { did, uri } }, event.log);
+  identityContract.on("IdentityRegistered", async (account, did, uri, event) => {
+    await record("IdentityRegistered", { account, payload: { did, uri } }, event.log);
     persistNow();
     console.log("Identity registered:", account, did);
   });
 
-  identityContract.on("IdentityRevoked", (account, event) => {
-    record("IdentityRevoked", { account }, event.log);
+  identityContract.on("IdentityRevoked", async (account, event) => {
+    await record("IdentityRevoked", { account }, event.log);
     persistNow();
     console.log("Identity revoked:", account);
   });
 
-  identityContract.on("IdentityRegistryPaused", (admin, event) => {
-    record("IdentityRegistryPaused", { account: admin }, event.log);
+  identityContract.on("IdentityRegistryPaused", async (admin, event) => {
+    await record("IdentityRegistryPaused", { account: admin }, event.log);
     persistNow();
     console.log("Identity registry paused by:", admin);
   });
 
-  identityContract.on("IdentityRegistryUnpaused", (admin, event) => {
-    record("IdentityRegistryUnpaused", { account: admin }, event.log);
+  identityContract.on("IdentityRegistryUnpaused", async (admin, event) => {
+    await record("IdentityRegistryUnpaused", { account: admin }, event.log);
     persistNow();
     console.log("Identity registry unpaused by:", admin);
   });
 
-  assetContract.on("AssetMinted", (tokenId, owner, uri, event) => {
-    record("AssetMinted", { tokenId: tokenId.toString(), account: owner, payload: { uri } }, event.log);
+  assetContract.on("AssetMinted", async (tokenId, owner, uri, event) => {
+    await record("AssetMinted", { tokenId: tokenId.toString(), account: owner, payload: { uri } }, event.log);
     persistNow();
     console.log("Asset minted:", tokenId.toString(), owner);
   });
 
-  assetContract.on("AssetTransferred", (tokenId, from, to, event) => {
-    record("AssetTransferred", { tokenId: tokenId.toString(), from, to }, event.log);
+  assetContract.on("AssetTransferred", async (tokenId, from, to, event) => {
+    await record("AssetTransferred", { tokenId: tokenId.toString(), from, to }, event.log);
     persistNow();
     console.log("Asset transferred:", tokenId.toString(), from, "->", to);
   });
 
-  assetContract.on("AssetReclaimed", (tokenId, from, to, event) => {
-    record("AssetReclaimed", { tokenId: tokenId.toString(), from, to }, event.log);
+  assetContract.on("AssetReclaimed", async (tokenId, from, to, event) => {
+    await record("AssetReclaimed", { tokenId: tokenId.toString(), from, to }, event.log);
     persistNow();
     console.log("Asset reclaimed:", tokenId.toString(), from, "->", to);
   });
 
-  assetContract.on("PlatformPaused", (admin, event) => {
-    record("PlatformPaused", { account: admin }, event.log);
+  assetContract.on("PlatformPaused", async (admin, event) => {
+    await record("PlatformPaused", { account: admin }, event.log);
     persistNow();
     console.log("Platform paused by:", admin);
   });
 
-  assetContract.on("PlatformUnpaused", (admin, event) => {
-    record("PlatformUnpaused", { account: admin }, event.log);
+  assetContract.on("PlatformUnpaused", async (admin, event) => {
+    await record("PlatformUnpaused", { account: admin }, event.log);
     persistNow();
     console.log("Platform unpaused by:", admin);
   });
 
-  approvalContract.on("ActionProposed", (proposalId, targetContract, actionType, proposer, data, event) => {
-    record(
+  approvalContract.on("ActionProposed", async (proposalId, targetContract, actionType, proposer, data, event) => {
+    await record(
       "ActionProposed",
       // actionType is a uint8 enum - ethers returns it as a BigInt, which
       // JSON.stringify (used when persisting payload below) cannot serialize
@@ -163,8 +190,8 @@ function attachListeners(identityContract, assetContract, approvalContract) {
     console.log("Action proposed:", proposalId.toString(), "by", proposer);
   });
 
-  approvalContract.on("ActionApproved", (proposalId, approver, approvalCount, event) => {
-    record(
+  approvalContract.on("ActionApproved", async (proposalId, approver, approvalCount, event) => {
+    await record(
       "ActionApproved",
       { tokenId: proposalId.toString(), account: approver, payload: { approvalCount: approvalCount.toString() } },
       event.log
@@ -173,8 +200,8 @@ function attachListeners(identityContract, assetContract, approvalContract) {
     console.log("Action approved:", proposalId.toString(), "by", approver, `(${approvalCount}/2)`);
   });
 
-  approvalContract.on("ActionExecuted", (proposalId, event) => {
-    record("ActionExecuted", { tokenId: proposalId.toString() }, event.log);
+  approvalContract.on("ActionExecuted", async (proposalId, event) => {
+    await record("ActionExecuted", { tokenId: proposalId.toString() }, event.log);
     persistNow();
     console.log("Action executed:", proposalId.toString());
   });
@@ -186,7 +213,7 @@ function attachListeners(identityContract, assetContract, approvalContract) {
 async function catchUpEvent(contract, eventName, fromBlock, toBlock, mapArgs) {
   const logs = await contract.queryFilter(eventName, fromBlock, toBlock);
   for (const log of logs) {
-    record(eventName, mapArgs(log.args), log);
+    await record(eventName, mapArgs(log.args), log);
   }
   return logs.length;
 }
