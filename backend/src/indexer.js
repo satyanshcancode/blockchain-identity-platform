@@ -10,7 +10,16 @@
 // are made harmless by the DB's unique (tx_hash, log_index) constraint.
 require("dotenv").config();
 const { ethers } = require("ethers");
-const { insertEvent, getLastProcessedBlock, markProcessedThrough, resetProcessedBlock, persistNow } = require("./db");
+const {
+  insertEvent,
+  getLastProcessedBlock,
+  markProcessedThrough,
+  resetProcessedBlock,
+  getChainFingerprint,
+  setChainFingerprint,
+  countStaleEvents,
+  persistNow
+} = require("./db");
 const { waitForRpc } = require("./config/waitForRpc");
 
 // Forces ethers to watch for events by polling eth_getLogs over a block
@@ -60,6 +69,61 @@ process.on("unhandledRejection", (reason) => {
 // change, an RPC restart, ...), so a demo can't be silently missing data
 // with no visible sign of it.
 const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000;
+
+// Identifies which chain generation the indexer is currently talking to -
+// chainId alone isn't enough (every hardhat-node instance reports the same
+// 31337), so this pairs it with the genesis block's hash, which is different
+// every time hardhat-node starts a fresh in-memory chain (no chain-state
+// volume - see docker-compose.yml). Every persisted event gets stamped with
+// this (see record() below), so a later restart can tell "this row is from
+// the chain I'm looking at right now" apart from "this row is from some
+// earlier, now-replaced chain" - see db.js's getAllEvents().
+async function computeChainFingerprint(provider) {
+  const [network, genesisBlock] = await Promise.all([provider.getNetwork(), provider.getBlock(0)]);
+  return `${network.chainId}:${genesisBlock.hash}`;
+}
+
+// The fingerprint every record() call stamps new events with. Kept as
+// module state (rather than re-reading indexer_state on every insert)
+// because it also needs to be updated mid-session, not just at boot - see
+// syncChainFingerprint()'s call inside scheduleHeartbeat()'s reset branch.
+let currentChainFingerprint = null;
+
+// Compares the chain's actual current identity against what's persisted in
+// indexer_state (see db.js's get/setChainFingerprint) and, if they differ,
+// records the new one and logs how many previously-persisted events no
+// longer belong to the chain now being followed - db.js's getAllEvents()
+// uses this same stored value to exclude exactly those events from
+// /api/audit, the anomaly detector, and the known-id helpers in
+// assets.js/approvals.js, without ever deleting them. Called both at
+// start() (the normal boot path) and from scheduleHeartbeat()'s
+// already-detected-a-reset branch, mirroring how that branch already
+// mirrors start()'s block-height reset check - a reset caught mid-session
+// needs its own fingerprint update just as much as one caught at boot,
+// otherwise events backfilled right after would get stamped with the stale
+// fingerprint and immediately filtered out as if they weren't current.
+async function syncChainFingerprint() {
+  const fingerprint = await computeChainFingerprint(provider);
+  const stored = getChainFingerprint();
+  if (stored !== fingerprint) {
+    const staleCount = countStaleEvents(fingerprint);
+    if (stored == null) {
+      console.warn(
+        `Indexer: recording chain fingerprint for the first time (${fingerprint}). ` +
+          `${staleCount} pre-existing event(s) predate chain-fingerprint tracking and will be treated as ` +
+          `belonging to a previous/unknown chain generation - excluded from current views, not deleted.`
+      );
+    } else {
+      console.warn(
+        `Indexer: chain fingerprint changed (was ${stored}, now ${fingerprint}) - the chain was replaced. ` +
+          `${staleCount} event(s) from the previous chain generation will be excluded from current views (not deleted).`
+      );
+    }
+    setChainFingerprint(fingerprint);
+    persistNow();
+  }
+  currentChainFingerprint = fingerprint;
+}
 
 const identityAbi = [
   "event IdentityRegistered(address indexed account, string did, string metadataURI)",
@@ -114,7 +178,8 @@ async function record(type, fields, log) {
     blockNumber: log.blockNumber,
     txHash: log.transactionHash,
     logIndex: log.index,
-    ts: await getBlockTimestampMs(log.blockNumber)
+    ts: await getBlockTimestampMs(log.blockNumber),
+    chainFingerprint: currentChainFingerprint
   });
 }
 
@@ -316,6 +381,13 @@ function scheduleHeartbeat(identityContract, assetContract, approvalContract) {
             `chain was likely reset (e.g. hardhat-node recreated without a backend restart); re-scanning from block 0.`
           );
 
+          // Updates currentChainFingerprint (and logs/persists it) before
+          // the backfill below runs - otherwise catchUpAll would stamp the
+          // events it's about to replay with the OLD fingerprint, and
+          // getAllEvents() would immediately filter them out as if they
+          // weren't current, defeating the point of backfilling them at all.
+          await syncChainFingerprint();
+
           // Resetting the checkpoint alone isn't enough: the live
           // listeners' internal ethers PollingEventSubscriber instances
           // (see the polling:true comment above) each track their own
@@ -373,6 +445,12 @@ function scheduleHeartbeat(identityContract, assetContract, approvalContract) {
 async function start() {
   console.log(`Indexer: connecting to RPC at ${process.env.RPC_URL}...`);
   const currentBlock = await waitForRpc(provider);
+
+  // Must happen before attachListeners()/the catch-up scan below - both can
+  // persist events via record(), which stamps whatever currentChainFingerprint
+  // currently holds. Doing this first guarantees it's never still at its
+  // initial null by the time anything is recorded.
+  await syncChainFingerprint();
 
   const identityContract = new ethers.Contract(process.env.IDENTITY_REGISTRY_ADDRESS, identityAbi, provider);
   const assetContract = new ethers.Contract(process.env.ASSET_NFT_ADDRESS, assetAbi, provider);

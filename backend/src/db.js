@@ -17,6 +17,19 @@ const DB_PATH = process.env.EVENTS_DB_PATH || path.join(__dirname, "..", "data",
 
 let db;
 
+function hasColumn(table, column) {
+  const stmt = db.prepare(`PRAGMA table_info(${table})`);
+  let found = false;
+  while (stmt.step()) {
+    if (stmt.getAsObject().name === column) {
+      found = true;
+      break;
+    }
+  }
+  stmt.free();
+  return found;
+}
+
 async function initDb() {
   if (db) return db;
 
@@ -38,9 +51,19 @@ async function initDb() {
       tx_hash TEXT NOT NULL,
       log_index INTEGER NOT NULL,
       ts INTEGER NOT NULL,
+      chain_fingerprint TEXT,
       UNIQUE(tx_hash, log_index)
     );
   `);
+  // A DB file from before chain-fingerprint tracking existed already has an
+  // `events` table - CREATE TABLE IF NOT EXISTS above is a no-op against it,
+  // so the new column has to be added explicitly. Every pre-existing row
+  // gets chain_fingerprint = NULL, which getAllEvents() below treats the
+  // same as "doesn't match the current chain" - correct, since there's no
+  // way to know which chain generation produced them.
+  if (!hasColumn("events", "chain_fingerprint")) {
+    db.run("ALTER TABLE events ADD COLUMN chain_fingerprint TEXT");
+  }
   db.run(`
     CREATE TABLE IF NOT EXISTS indexer_state (
       key TEXT PRIMARY KEY,
@@ -76,12 +99,19 @@ function assertReady() {
 // unique constraint means replaying the same log twice - e.g. because it was
 // returned by both the startup catch-up scan and a live listener - is a
 // silent no-op rather than a duplicate row.
-function insertEvent({ type, tokenId, account, from, to, payload, blockNumber, txHash, logIndex, ts }) {
+//
+// chainFingerprint stamps the event with the chain generation it was
+// observed on (see get/setChainFingerprint below) - indexer.js supplies its
+// currently-known fingerprint on every call. getAllEvents() uses this to
+// tell current-chain events apart from ones left over from a chain that's
+// since been replaced (e.g. hardhat-node recreated with no chain-state
+// volume), without ever deleting the older rows.
+function insertEvent({ type, tokenId, account, from, to, payload, blockNumber, txHash, logIndex, ts, chainFingerprint }) {
   assertReady();
   db.run(
     `INSERT OR IGNORE INTO events
-       (type, token_id, account, from_address, to_address, payload, block_number, tx_hash, log_index, ts)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (type, token_id, account, from_address, to_address, payload, block_number, tx_hash, log_index, ts, chain_fingerprint)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       type,
       tokenId != null ? String(tokenId) : null,
@@ -92,7 +122,8 @@ function insertEvent({ type, tokenId, account, from, to, payload, blockNumber, t
       blockNumber,
       txHash,
       logIndex,
-      ts
+      ts,
+      chainFingerprint || null
     ]
   );
   markProcessedThrough(blockNumber);
@@ -146,10 +177,27 @@ function rowToEntry(row) {
   }
 }
 
+// The single choke point every consumer of the event log goes through
+// (routes/audit.js, anomalyDetector.js, assets.js's knownTokenIds(),
+// approvals.js's knownProposalIds()) - filtering here, once, means none of
+// them can forget to and none of them can present a dead chain's history as
+// if it were live. Rows from a superseded chain generation (chain_fingerprint
+// not equal to the current one, see get/setChainFingerprint) are excluded
+// from the result but never deleted - the full history is still in the DB
+// file for anyone who needs to inspect it directly.
+//
+// If no fingerprint has been recorded yet (in practice: nothing calls this
+// before indexer.js's start() has run once), filtering can't be done
+// meaningfully yet, so this falls back to returning everything rather than
+// silently returning nothing.
 function getAllEvents() {
   assertReady();
+  const currentFingerprint = getChainFingerprint();
   const rows = [];
-  const stmt = db.prepare("SELECT * FROM events ORDER BY id ASC");
+  const stmt = currentFingerprint
+    ? db.prepare("SELECT * FROM events WHERE chain_fingerprint = ? ORDER BY id ASC")
+    : db.prepare("SELECT * FROM events ORDER BY id ASC");
+  if (currentFingerprint) stmt.bind([currentFingerprint]);
   while (stmt.step()) rows.push(stmt.getAsObject());
   stmt.free();
   return rows.map(rowToEntry);
@@ -192,6 +240,42 @@ function markProcessedThrough(blockNumber) {
 // function rather than a flag on markProcessedThrough.
 function resetProcessedBlock(blockNumber) {
   setLastProcessedBlock(blockNumber);
+}
+
+// The chain identity (chainId + genesis block hash - see indexer.js's
+// computeChainFingerprint) the indexer last confirmed it was talking to.
+// Same storage pattern as lastProcessedBlock above: a key in indexer_state,
+// null meaning "never recorded" rather than any real fingerprint value.
+function getChainFingerprint() {
+  assertReady();
+  const stmt = db.prepare("SELECT value FROM indexer_state WHERE key = 'chainFingerprint'");
+  const value = stmt.step() ? stmt.getAsObject().value : null;
+  stmt.free();
+  return value || null;
+}
+
+function setChainFingerprint(fingerprint) {
+  assertReady();
+  db.run(
+    `INSERT INTO indexer_state (key, value) VALUES ('chainFingerprint', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [fingerprint]
+  );
+}
+
+// How many persisted events do NOT belong to `currentFingerprint` - i.e. how
+// many getAllEvents() is about to exclude. Used purely for the startup log
+// line (see indexer.js) so a chain replacement is visible in the logs with a
+// concrete count, not just a silent behavior change.
+function countStaleEvents(currentFingerprint) {
+  assertReady();
+  const stmt = db.prepare(
+    "SELECT COUNT(*) AS c FROM events WHERE chain_fingerprint IS NULL OR chain_fingerprint != ?"
+  );
+  stmt.bind([currentFingerprint]);
+  const count = stmt.step() ? stmt.getAsObject().c : 0;
+  stmt.free();
+  return count;
 }
 
 // Upsert: acknowledging an already-acknowledged anomaly just updates who/when
@@ -244,6 +328,9 @@ module.exports = {
   getLastProcessedBlock,
   markProcessedThrough,
   resetProcessedBlock,
+  getChainFingerprint,
+  setChainFingerprint,
+  countStaleEvents,
   persistNow,
   acknowledgeAnomaly,
   getAnomalyAcknowledgements
