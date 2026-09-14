@@ -19,15 +19,18 @@ function matchVerifyRoute(pathname) {
 const TABS = [
   { key: "identity", label: "Identity" },
   { key: "assets", label: "Assets" },
-  // "admin" is added dynamically below, only for Admin/Auditor wallets - the
-  // panel itself is never mounted for anyone else (see AdminAuditPanel.jsx).
+  // "admin" is added dynamically below, for Admin/Auditor/Co-Signer wallets -
+  // the panel itself is never mounted for anyone else (see
+  // AdminAuditPanel.jsx), and shows each of those three only the sections
+  // they actually hold an on-chain role for.
 ];
 
 function Tabs() {
   const { roles } = useWallet();
   const [tab, setTab] = useState("identity");
 
-  const tabs = roles.isAdmin || roles.isAuditor ? [...TABS, { key: "admin", label: "Admin / Audit" }] : TABS;
+  const tabs =
+    roles.isAdmin || roles.isAuditor || roles.isCoSigner ? [...TABS, { key: "admin", label: "Admin / Audit" }] : TABS;
   const activeTab = tabs.some((t) => t.key === tab) ? tab : "identity";
 
   return (

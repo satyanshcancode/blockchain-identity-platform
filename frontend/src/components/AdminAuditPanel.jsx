@@ -24,10 +24,19 @@ import {
   getIdentityPaused
 } from "../services/contractService";
 
-// Rendered only if the connected wallet has ADMIN_ROLE or AUDITOR_ROLE - see
-// App.jsx, which doesn't mount this component at all otherwise. The guard
-// below is a defensive backstop in case that ever changes, not the primary
-// gate: per the spec this panel must be hidden entirely, not just disabled.
+// Rendered only if the connected wallet has ADMIN_ROLE, AUDITOR_ROLE, or
+// CO_SIGNER_ROLE - see App.jsx, which doesn't mount this component at all
+// otherwise. The guard below is a defensive backstop in case that ever
+// changes, not the primary gate: per the spec this panel must be hidden
+// entirely, not just disabled, for anyone holding none of the three.
+//
+// Within the panel, each section below gates itself independently against
+// the on-chain modifier that actually protects the action/read it drives -
+// a co-signer-only wallet (no admin, no auditor) sees Pending Approvals and
+// the two Propose forms, but not the audit log, anomalies, compliance
+// lookup, transfer-history lookup, or pause controls, since it holds none
+// of the roles those are gated on. See each loader/section below for the
+// specific modifier it matches.
 export default function AdminAuditPanel() {
   const { address, signer, roles } = useWallet();
 
@@ -80,8 +89,13 @@ export default function AdminAuditPanel() {
   const [reclaimBusy, setReclaimBusy] = useState(false);
   const [reclaimStatus, setReclaimStatus] = useState(null);
 
+  // GET /api/audit is backend-gated to AUDITOR/ADMIN (see
+  // backend/src/routes/audit.js) - skipping the call entirely for anyone
+  // else (a co-signer-only wallet, say) means they never see a 403 flash
+  // into the shared error banner just because this ran on mount.
   const loadAuditLog = async () => {
     if (!signer || !address) return;
+    if (!roles.isAdmin && !roles.isAuditor) return;
     setAuditLoading(true);
     setError(null);
     try {
@@ -130,8 +144,11 @@ export default function AdminAuditPanel() {
     }
   }, [roles.isCoSigner, address, signer]);
 
+  // GET /api/audit/anomalies is backend-gated to AUDITOR/ADMIN too - same
+  // reasoning as loadAuditLog above.
   const loadAnomalies = useCallback(async () => {
     if (!signer || !address) return;
+    if (!roles.isAdmin && !roles.isAuditor) return;
     setAnomaliesLoading(true);
     try {
       setAnomalies(await getAnomalies(signer, address));
@@ -140,7 +157,7 @@ export default function AdminAuditPanel() {
     } finally {
       setAnomaliesLoading(false);
     }
-  }, [signer, address]);
+  }, [roles.isAdmin, roles.isAuditor, signer, address]);
 
   useEffect(() => {
     loadAuditLog();
@@ -149,7 +166,7 @@ export default function AdminAuditPanel() {
     loadAnomalies();
   }, [loadPaused, loadPendingApprovals, loadAnomalies]);
 
-  if (!roles.isAdmin && !roles.isAuditor) return null;
+  if (!roles.isAdmin && !roles.isAuditor && !roles.isCoSigner) return null;
 
   const handleHistoryLookup = async (e) => {
     e.preventDefault();
@@ -446,7 +463,7 @@ export default function AdminAuditPanel() {
         );
       })()}
 
-      {(() => {
+      {(roles.isAdmin || roles.isAuditor) && (() => {
         const unreviewed = anomalies.filter((a) => !a.acknowledged);
         const reviewed = anomalies.filter((a) => a.acknowledged);
         return (
@@ -508,84 +525,93 @@ export default function AdminAuditPanel() {
         );
       })()}
 
-      <section className="panel">
-        <div className="panel__header">
-          <h3 className="panel__title">Audit log</h3>
-          <button className="btn btn--secondary btn--sm" onClick={loadAuditLog} disabled={auditLoading}>
-            {auditLoading ? "Loading..." : "Refresh"}
-          </button>
-        </div>
-        <div className="table-scroll">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Details</th>
-                <th>Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {auditLog.map((entry, i) => (
-                <tr key={i}>
-                  <td>{entry.type}</td>
-                  <td>{describeEntry(entry)}</td>
-                  <td>{new Date(entry.ts).toLocaleString()}</td>
+      {(roles.isAdmin || roles.isAuditor) && (
+        <section className="panel">
+          <div className="panel__header">
+            <h3 className="panel__title">Audit log</h3>
+            <button className="btn btn--secondary btn--sm" onClick={loadAuditLog} disabled={auditLoading}>
+              {auditLoading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Details</th>
+                  <th>Time</th>
                 </tr>
+              </thead>
+              <tbody>
+                {auditLog.map((entry, i) => (
+                  <tr key={i}>
+                    <td>{entry.type}</td>
+                    <td>{describeEntry(entry)}</td>
+                    <td>{new Date(entry.ts).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* getTransferHistory() is onlyAuditorOrAdmin on-chain (the backend
+          route itself has no separate caller-role gate, but this UI still
+          scopes it to the same two roles rather than relying on that). */}
+      {(roles.isAdmin || roles.isAuditor) && (
+        <section className="panel">
+          <h3 className="panel__title">Per-token transfer history</h3>
+          <form onSubmit={handleHistoryLookup} className="inline-form mt-3">
+            <label className="field" style={{ marginBottom: 0 }}>
+              <span className="field__label-text">Token ID</span>
+              <input value={historyTokenId} onChange={(e) => setHistoryTokenId(e.target.value)} required />
+            </label>
+            <button type="submit" className="btn" disabled={historyBusy}>{historyBusy ? "Looking up..." : "Lookup"}</button>
+          </form>
+          {history && (
+            <ul className="item-list mt-3">
+              {history.map((h, i) => (
+                <li key={i} className="item-list__row">
+                  <span className="mono">{h.from}</span> → <span className="mono">{h.to}</span> at{" "}
+                  {new Date(Number(h.timestamp) * 1000).toLocaleString()}
+                </li>
               ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+            </ul>
+          )}
+        </section>
+      )}
 
-      <section className="panel">
-        <h3 className="panel__title">Per-token transfer history</h3>
-        <form onSubmit={handleHistoryLookup} className="inline-form mt-3">
-          <label className="field" style={{ marginBottom: 0 }}>
-            <span className="field__label-text">Token ID</span>
-            <input value={historyTokenId} onChange={(e) => setHistoryTokenId(e.target.value)} required />
-          </label>
-          <button type="submit" className="btn" disabled={historyBusy}>{historyBusy ? "Looking up..." : "Lookup"}</button>
-        </form>
-        {history && (
-          <ul className="item-list mt-3">
-            {history.map((h, i) => (
-              <li key={i} className="item-list__row">
-                <span className="mono">{h.from}</span> → <span className="mono">{h.to}</span> at{" "}
-                {new Date(Number(h.timestamp) * 1000).toLocaleString()}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="panel">
-        <h3 className="panel__title">Per-identity compliance record</h3>
-        <form onSubmit={handleComplianceLookup} className="inline-form mt-3">
-          <label className="field" style={{ marginBottom: 0 }}>
-            <span className="field__label-text">Address</span>
-            <input
-              className="mono-input"
-              value={complianceAddress}
-              onChange={(e) => setComplianceAddress(e.target.value)}
-              placeholder="0x..."
-              required
-            />
-          </label>
-          <button type="submit" className="btn" disabled={complianceBusy}>{complianceBusy ? "Looking up..." : "Lookup"}</button>
-        </form>
-        {compliance && (
-          <dl className="kv-list mt-3">
-            <dt>Registered at</dt>
-            <dd>{formatTs(compliance.registeredAt)}</dd>
-            <dt>Last updated at</dt>
-            <dd>{formatTs(compliance.lastUpdatedAt)}</dd>
-            <dt>Revoked at</dt>
-            <dd>{compliance.revokedAt !== "0" ? formatTs(compliance.revokedAt) : "never"}</dd>
-            <dt>Revocation count</dt>
-            <dd>{compliance.revocationCount}</dd>
-          </dl>
-        )}
-      </section>
+      {(roles.isAdmin || roles.isAuditor) && (
+        <section className="panel">
+          <h3 className="panel__title">Per-identity compliance record</h3>
+          <form onSubmit={handleComplianceLookup} className="inline-form mt-3">
+            <label className="field" style={{ marginBottom: 0 }}>
+              <span className="field__label-text">Address</span>
+              <input
+                className="mono-input"
+                value={complianceAddress}
+                onChange={(e) => setComplianceAddress(e.target.value)}
+                placeholder="0x..."
+                required
+              />
+            </label>
+            <button type="submit" className="btn" disabled={complianceBusy}>{complianceBusy ? "Looking up..." : "Lookup"}</button>
+          </form>
+          {compliance && (
+            <dl className="kv-list mt-3">
+              <dt>Registered at</dt>
+              <dd>{formatTs(compliance.registeredAt)}</dd>
+              <dt>Last updated at</dt>
+              <dd>{formatTs(compliance.lastUpdatedAt)}</dd>
+              <dt>Revoked at</dt>
+              <dd>{compliance.revokedAt !== "0" ? formatTs(compliance.revokedAt) : "never"}</dd>
+              <dt>Revocation count</dt>
+              <dd>{compliance.revocationCount}</dd>
+            </dl>
+          )}
+        </section>
+      )}
 
       <section className="panel">
         <h3 className="panel__title">Pending approvals</h3>
