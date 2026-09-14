@@ -4,6 +4,13 @@ const SHARED_ADDRESSES_PATH = process.env.SHARED_ADDRESSES_PATH || "/shared/addr
 const MAX_WAIT_MS = 30000;
 const POLL_INTERVAL_MS = 1000;
 
+// Captured at module load - as close to "this container's startup" as this
+// process gets - so a stale addresses.json already sitting on the shared
+// volume from a PREVIOUS deploy (the volume survives container recreation;
+// the deploy doesn't) can be told apart from a fresh one written by THIS
+// boot's hardhat-node entrypoint. See the freshness check below.
+const PROCESS_STARTED_AT = Date.now();
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -26,6 +33,26 @@ async function loadDeployedAddresses() {
     if (fs.existsSync(SHARED_ADDRESSES_PATH)) {
       try {
         const addresses = JSON.parse(fs.readFileSync(SHARED_ADDRESSES_PATH, "utf8"));
+        // Confirmed live: this container can start and reach this check
+        // before hardhat-node's own entrypoint (which sleeps, then runs
+        // deploy.js) has finished overwriting the file for THIS boot - the
+        // shared volume persists across restarts, so `existsSync` alone was
+        // satisfied by a leftover file from an earlier deploy. Hardhat's
+        // deterministic CREATE addressing happened to make every redeploy
+        // produce identical addresses, so that race was harmless in
+        // practice - but that's not guaranteed (a different account funding
+        // order, a new contract added to deploy.js's sequence, etc. would
+        // change it), so a deployedAt older than this process's own
+        // startup is treated the same as the file not existing yet.
+        const deployedAt = Date.parse(addresses.deployedAt);
+        if (!Number.isNaN(deployedAt) && deployedAt < PROCESS_STARTED_AT) {
+          console.warn(
+            `Found ${SHARED_ADDRESSES_PATH} but it predates this container's startup ` +
+              `(deployed ${addresses.deployedAt}) - waiting for a fresh deploy...`
+          );
+          await sleep(POLL_INTERVAL_MS);
+          continue;
+        }
         if (addresses.ROLE_REGISTRY_ADDRESS) process.env.ROLE_REGISTRY_ADDRESS = addresses.ROLE_REGISTRY_ADDRESS;
         if (addresses.APPROVAL_REGISTRY_ADDRESS) process.env.APPROVAL_REGISTRY_ADDRESS = addresses.APPROVAL_REGISTRY_ADDRESS;
         if (addresses.IDENTITY_REGISTRY_ADDRESS) process.env.IDENTITY_REGISTRY_ADDRESS = addresses.IDENTITY_REGISTRY_ADDRESS;
@@ -38,7 +65,7 @@ async function loadDeployedAddresses() {
     }
     await sleep(POLL_INTERVAL_MS);
   }
-  console.warn(`Timed out waiting for ${SHARED_ADDRESSES_PATH} — using environment variables as-is.`);
+  console.warn(`Timed out waiting for a fresh ${SHARED_ADDRESSES_PATH} — using environment variables as-is.`);
 }
 
 module.exports = { loadDeployedAddresses };
