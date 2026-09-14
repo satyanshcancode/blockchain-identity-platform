@@ -1,75 +1,216 @@
-# Blockchain-Based Secure Platform for Identity, Access Control & Digital Asset Management
+# Blockchain-Based Identity, Access Control & Digital Asset Management Platform
 
-A permissioned-blockchain platform combining Decentralized Identifiers (DID), Role-Based
-Access Control (RBAC) enforced by smart contracts, and NFT-based digital asset ownership,
-with a fully immutable on-chain audit trail.
+**Smart India Hackathon 2026 — Problem Statement 26125**
+Bharat Electronics Limited · Blockchain & Cybersecurity
 
-## Folder structure
+A decentralised platform that unifies self-sovereign identity, on-chain role-based access control, and NFT-based asset ownership — with every permission enforced by smart contracts rather than application code, and every action permanently recorded.
+
+---
+
+## What this is
+
+Organisations managing sensitive assets face two linked problems: identity and access control sit in centralised systems that create single points of failure, and asset ownership is tracked across disconnected records that are slow and unreliable to verify.
+
+This platform addresses both in one system, and goes further than the baseline: it is built on the assumption that **the administrator may be the threat**.
+
+- An administrator **cannot** register an identity without that person's own cryptographic consent
+- The two most destructive actions — revoking an identity, reclaiming an asset — require **two independent co-signers**
+- The entire platform can be **frozen in one action** when a breach is suspected
+- The system **watches its own audit trail** and flags anomalous patterns
+- Anyone can **verify an asset with no wallet, no account, and no app** — just a phone camera
+
+---
+
+## Core features
+
+### Identity
+- DID anchoring with **EIP-712 signed holder consent** — registration requires a signature from the account being registered, with per-account nonces preventing replay
+- Self-service metadata updates by the identity holder
+- Revocation immediately and mechanically blocks asset movement
+- Auditor-only compliance records (registration, revocation history, revocation count)
+
+### Access control
+Five on-chain roles, each gating distinct capability:
+
+| Role | Capability |
+|---|---|
+| **Admin** | Register identities, assign roles, pause the platform, propose revocations and reclaims |
+| **Manager** | Mint asset records |
+| **Auditor** | Read-only — full histories, compliance records, anomaly alerts. No write access. |
+| **User** | Hold and transfer assets, update own metadata |
+| **Co-Signer** | Jointly approve high-risk actions. Deliberately independent of Admin. |
+
+### Assets
+- ERC-721 tokens bound to **active** identities — minting to an unregistered address is rejected on-chain
+- Full per-token provenance (mint, every transfer, any reclaim) with timestamps
+- Constrained reclaim: only from a **revoked** holder, to an **active** one, and itself co-signed
+
+### Security
+- **2-of-N multi-signature** approval for revocation and reclaim, with execution-time re-validation against TOCTOU
+- **Independent emergency pause** on both asset and identity operations, with honest reporting of partial states
+- **Rule-based anomaly detection** over the audit log (rapid mint bursts, mint-then-immediate-transfer, admin action bursts, unapproved proposal backlogs) with reviewer acknowledgement recorded rather than alerts deleted
+- **EIP-712 API authentication** — the backend verifies the *caller's* on-chain role per request, not just its own
+
+### Reliability
+- Self-healing event indexer: recovers from RPC disconnects, detects chain resets, backfills missed blocks automatically
+- Crash-safe persistence (atomic temp-file + rename)
+- Chain-generation fingerprinting — events from a superseded chain are never presented as current state
+- Real block timestamps, so anomaly detection stays accurate after downtime replay
+
+### Public verification
+- Wallet-free verification page with scannable QR codes
+- Shows current owner, metadata, full custody history, and a prominent warning if the current holder's identity has been revoked
+
+---
+
+## Architecture
 
 ```
-blockchain-identity-platform/
-├── contracts/          Solidity smart contracts (RBAC, Identity, Asset NFT)
-├── scripts/            Hardhat deployment scripts
-├── test/               Contract unit tests
-├── backend/            Node.js API + blockchain event indexer + DID resolver
-├── frontend/           React DApp (identity, asset, role dashboards)
-├── docs/               Architecture & workflow notes
-├── hardhat.config.js   Hardhat network/config
-└── package.json        Root (contracts) dependencies
+┌─────────────────────────────────────────────────────────┐
+│  Frontend — React + ethers.js + MetaMask                │
+│  Wallet connect · Identity · Assets · Admin/Audit       │
+│  Public verification page (no wallet required)          │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────┐
+│  Backend — Node.js + Express                            │
+│  Self-healing indexer · Persistent audit store          │
+│  Anomaly detector · Signature-authenticated REST API    │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────┐
+│  Smart contracts — Solidity on EVM                      │
+│  RoleRegistry · IdentityRegistry · AssetNFT             │
+│  ApprovalRegistry (multi-signature)                     │
+└─────────────────────────────────────────────────────────┘
 ```
 
-## Prerequisites
-- Node.js 18+
-- npm or yarn
-- MetaMask (for testnet interaction)
-- An RPC endpoint (local Hardhat node, or a testnet like Polygon Amoy)
+All access rules live in **Layer 1**. Compromising the backend does not grant the ability to mint, revoke, or reclaim — the chain would reject it.
 
-## Quick start (contracts)
+---
+
+## Quick start
+
+**Prerequisites:** Docker Desktop (running), MetaMask browser extension, ~5 GB free disk space.
 
 ```bash
-npm install
-npx hardhat compile
-npx hardhat test
-npx hardhat node                                       # terminal 1: local chain
-npx hardhat run scripts/deploy.js --network localhost  # terminal 2: deploy
-```
-
-## Quick start (backend)
-
-```bash
-cd backend
-npm install
-cp .env.example .env     # fill in RPC_URL, PRIVATE_KEY, contract addresses
-npm start
-```
-
-## Quick start (frontend)
-
-```bash
-cd frontend
-npm install
-npm start
-```
-
-See `docs/smart-contract-flow.md` for how the contracts interact.
-
-## Run everything with Docker (no local Node.js/Hardhat install needed)
-
-Requires only Docker + Docker Compose installed.
-
-```bash
+git clone <repository-url>
+cd blockchain-identity-platform
 docker compose up --build
 ```
 
-This starts three containers:
-- `hardhat-node` — a local blockchain on `localhost:8545`, which auto-deploys
-  `RoleRegistry`, `IdentityRegistry`, and `AssetNFT` on startup (check
-  `docker compose logs hardhat-node` for the deployed addresses).
-- `backend` — the API on `localhost:4000`.
-- `frontend` — the React DApp on `localhost:3000`.
+First run takes a few minutes. When it settles, three services are running:
 
-Point MetaMask at `http://localhost:8545` (chain ID `31337`) to interact with
-the contracts directly from the browser.
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:3000 |
+| Backend API | http://localhost:4000 |
+| Blockchain node | http://localhost:8545 |
 
-To stop everything: `docker compose down`.
-To rebuild after changing a contract: `docker compose up --build`.
+### Connect MetaMask
+
+Add a custom network:
+
+| Field | Value |
+|---|---|
+| Network name | `Hardhat Local` |
+| RPC URL | `http://127.0.0.1:8545` |
+| Chain ID | `31337` |
+| Currency symbol | `ETH` |
+
+Then import test accounts. The `hardhat-node` logs print 20 accounts with private keys at startup — search the output for `Account #0`. Roles are assigned automatically at deployment:
+
+| Account | Role |
+|---|---|
+| #0 | Admin + Co-Signer |
+| #1, #2 | Co-Signer |
+| #3 | Manager |
+| #4 | Auditor |
+| #5, #6 | User |
+
+> These are Hardhat's publicly documented test keys. They hold no real value and must never be used on any real network.
+
+---
+
+## Testing
+
+```bash
+npx hardhat test
+```
+
+The contract test suite covers each access-control property individually — signature verification, replay protection, role gating, pause behaviour, multi-signature approval, self-approval rejection, and reclaim constraints.
+
+For manual verification, see the testing guide in `docs/`.
+
+---
+
+## Project structure
+
+```
+contracts/          Solidity contracts
+  RoleRegistry.sol        Role definitions and assignment
+  IdentityRegistry.sol    DID anchoring, signed consent, pause
+  AssetNFT.sol            ERC-721 assets, transfer rules, reclaim, pause
+  ApprovalRegistry.sol    Multi-signature proposal tracking
+
+backend/src/
+  indexer.js              Self-healing blockchain event listener
+  db.js                   Persistent audit storage
+  anomalyDetector.js      Rule-based pattern detection
+  routes/                 REST API endpoints
+  config/                 Address loading, RPC readiness
+
+frontend/src/
+  components/             UI including the public verification page
+  services/               Contract calls, API client, signature auth
+  context/                Wallet connection and role state
+
+scripts/            Deployment and utilities
+test/               Contract test suite
+```
+
+---
+
+## Useful commands
+
+```bash
+# Rebuild one service without resetting the blockchain
+docker compose build backend
+docker compose up -d --no-deps backend
+
+# Follow logs
+docker compose logs -f backend
+
+# Stop everything
+docker compose down
+```
+
+> Restarting `hardhat-node` resets the blockchain — it runs in memory. Identities and assets must be recreated. The audit store persists, but events from a previous chain are automatically excluded from current views.
+
+---
+
+## Known limitations
+
+Stated openly rather than discovered later:
+
+- **The oracle problem.** The system proves a *record* of custody changed, not that the *physical asset* moved. Custody claims are permanently attributable to a verified identity and cannot be altered afterwards, but binding record to reality is an organisational process, not something blockchain solves alone.
+- **Prototype status.** Runs on a local test network. Production would require an independent security audit, enterprise key management in place of browser wallets, and API hardening for scale.
+- **No automated backend/frontend tests.** Contract logic has automated coverage; backend and frontend are verified manually.
+- **Governance dependency.** Multi-signature protection is only as strong as the genuine independence of the co-signers — not something software can enforce.
+
+---
+
+## Documentation
+
+| Document | Purpose |
+|---|---|
+| Project Overview | Architecture, security model, use cases |
+| Implementation Blueprint | How this would be deployed at BEL, with sourced research |
+| Setup & Testing Guide | Full feature-by-feature verification |
+| Tester Workbook | Step-by-step guide for non-technical testers |
+
+---
+
+## Technology
+
+Solidity · Hardhat · OpenZeppelin · ethers.js v6 · Node.js · Express · React · Docker
