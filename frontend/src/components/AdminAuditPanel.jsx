@@ -409,37 +409,39 @@ export default function AdminAuditPanel() {
   };
 
   return (
-    <div style={box}>
-      <h2>Admin / audit panel</h2>
-      {error && <p style={styles.error}>{error}</p>}
+    <div>
+      <h2 className="page-title">Admin / audit panel</h2>
+      {error && <p className="alert alert--error">{error}</p>}
 
       {roles.isAdmin && assetsPaused != null && identityPaused != null && (() => {
         const bothActive = !assetsPaused && !identityPaused;
         const bothPaused = assetsPaused && identityPaused;
-        const bannerStyle = bothPaused ? styles.pausedBanner : bothActive ? styles.activeBanner : styles.partialBanner;
+        const bannerClass = bothPaused ? "banner--critical" : bothActive ? "banner--success" : "banner--warning";
         const title = bothPaused
           ? "⛔ FULLY PAUSED"
           : bothActive
             ? "✅ Active"
             : "⚠️ PARTIALLY PAUSED";
         return (
-          <section style={bannerStyle}>
-            <div style={styles.pausedBannerTitle}>{title}</div>
-            <p style={{ margin: "4px 0 4px" }}>
+          <section className={`banner ${bannerClass}`}>
+            <div className="banner__title">{title}</div>
+            <p className="banner__body" style={{ margin: "4px 0 4px" }}>
               Asset operations (mint / transfer / reclaim):{" "}
               <strong>{assetsPaused ? "paused" : "active"}</strong>
             </p>
-            <p style={{ margin: "4px 0 8px" }}>
+            <p className="banner__body" style={{ margin: "4px 0 8px" }}>
               Identity operations (register / revoke / approve revoke / update metadata):{" "}
               <strong>{identityPaused ? "paused" : "active"}</strong>
             </p>
-            <button onClick={() => handleSetPaused(true)} disabled={pauseBusy || bothPaused}>
-              {pauseBusy ? "Working..." : "Pause everything"}
-            </button>{" "}
-            <button onClick={() => handleSetPaused(false)} disabled={pauseBusy || bothActive}>
-              {pauseBusy ? "Working..." : "Resume everything"}
-            </button>
-            {pauseStatus && <p>{pauseStatus}</p>}
+            <div className="banner__actions">
+              <button className="btn btn--danger btn--sm" onClick={() => handleSetPaused(true)} disabled={pauseBusy || bothPaused}>
+                {pauseBusy ? "Working..." : "Pause everything"}
+              </button>
+              <button className="btn btn--sm" onClick={() => handleSetPaused(false)} disabled={pauseBusy || bothActive}>
+                {pauseBusy ? "Working..." : "Resume everything"}
+              </button>
+            </div>
+            {pauseStatus && <p className="banner__body mt-3">{pauseStatus}</p>}
           </section>
         );
       })()}
@@ -448,36 +450,38 @@ export default function AdminAuditPanel() {
         const unreviewed = anomalies.filter((a) => !a.acknowledged);
         const reviewed = anomalies.filter((a) => a.acknowledged);
         return (
-          <section style={unreviewed.length > 0 ? styles.pausedBanner : styles.activeBanner}>
-            <div style={styles.pausedBannerTitle}>
+          <section className={`banner ${unreviewed.length > 0 ? "banner--critical" : "banner--success"}`}>
+            <div className="banner__title">
               {unreviewed.length > 0
                 ? `⚠️ ${unreviewed.length} anomaly alert${unreviewed.length === 1 ? "" : "s"}`
                 : "✅ No anomalies detected"}
             </div>
-            <p style={{ margin: "4px 0 8px" }}>
+            <p className="banner__body" style={{ margin: "4px 0 8px" }}>
               Rule-based checks over the audit log - fixed thresholds (rapid mint bursts,
               mint-then-immediate-transfer, rapid admin action bursts, unapproved proposal
               backlogs), not AI/ML. Marking one reviewed doesn't erase it - it's recorded who
               reviewed it and when, not deleted.
             </p>
-            <button onClick={loadAnomalies} disabled={anomaliesLoading}>
-              {anomaliesLoading ? "Scanning..." : "Refresh"}
-            </button>{" "}
-            {reviewed.length > 0 && (
-              <button onClick={() => setShowReviewed((v) => !v)}>
-                {showReviewed ? "Hide reviewed alerts" : `Show ${reviewed.length} reviewed alert${reviewed.length === 1 ? "" : "s"}`}
+            <div className="banner__actions">
+              <button className="btn btn--secondary btn--sm" onClick={loadAnomalies} disabled={anomaliesLoading}>
+                {anomaliesLoading ? "Scanning..." : "Refresh"}
               </button>
-            )}
+              {reviewed.length > 0 && (
+                <button className="btn btn--secondary btn--sm" onClick={() => setShowReviewed((v) => !v)}>
+                  {showReviewed ? "Hide reviewed alerts" : `Show ${reviewed.length} reviewed alert${reviewed.length === 1 ? "" : "s"}`}
+                </button>
+              )}
+            </div>
             {unreviewed.length > 0 && (
-              <ul style={{ marginTop: 12 }}>
+              <ul className="item-list mt-3">
                 {unreviewed.map((a) => (
-                  <li key={a.id} style={{ marginBottom: 12 }}>
+                  <li key={a.id} className="item-list__row">
                     <strong>{a.ruleLabel}</strong>
                     <p style={{ margin: "4px 0" }}>{a.description}</p>
-                    <div style={styles.small}>
+                    <div className="small-text">
                       {a.events.length} event(s) involved — {a.addresses.join(", ")}
                     </div>
-                    <button onClick={() => handleAcknowledge(a)} disabled={ackBusyId === a.id}>
+                    <button className="btn btn--secondary btn--sm mt-3" onClick={() => handleAcknowledge(a)} disabled={ackBusyId === a.id}>
                       {ackBusyId === a.id ? "Marking..." : "Mark as reviewed"}
                     </button>
                   </li>
@@ -485,15 +489,15 @@ export default function AdminAuditPanel() {
               </ul>
             )}
             {showReviewed && reviewed.length > 0 && (
-              <ul style={{ marginTop: 12 }}>
+              <ul className="item-list mt-3">
                 {reviewed.map((a) => (
-                  <li key={a.id} style={{ marginBottom: 12, opacity: 0.75 }}>
+                  <li key={a.id} className="item-list__row item-list__row--muted">
                     <strong>{a.ruleLabel}</strong>
                     <p style={{ margin: "4px 0" }}>{a.description}</p>
-                    <div style={styles.small}>
+                    <div className="small-text">
                       {a.events.length} event(s) involved — {a.addresses.join(", ")}
                     </div>
-                    <div style={styles.small}>
+                    <div className="small-text">
                       ✓ Reviewed by {a.acknowledgedBy} at {new Date(a.acknowledgedAt).toLocaleString()}
                     </div>
                   </li>
@@ -504,24 +508,28 @@ export default function AdminAuditPanel() {
         );
       })()}
 
-      <section style={section}>
-        <h3>Audit log</h3>
-        <button onClick={loadAuditLog} disabled={auditLoading}>{auditLoading ? "Loading..." : "Refresh"}</button>
-        <div style={styles.scroll}>
-          <table style={styles.table}>
+      <section className="panel">
+        <div className="panel__header">
+          <h3 className="panel__title">Audit log</h3>
+          <button className="btn btn--secondary btn--sm" onClick={loadAuditLog} disabled={auditLoading}>
+            {auditLoading ? "Loading..." : "Refresh"}
+          </button>
+        </div>
+        <div className="table-scroll">
+          <table className="data-table">
             <thead>
               <tr>
-                <th style={styles.th}>Type</th>
-                <th style={styles.th}>Details</th>
-                <th style={styles.th}>Time</th>
+                <th>Type</th>
+                <th>Details</th>
+                <th>Time</th>
               </tr>
             </thead>
             <tbody>
               {auditLog.map((entry, i) => (
                 <tr key={i}>
-                  <td style={styles.td}>{entry.type}</td>
-                  <td style={styles.td}>{describeEntry(entry)}</td>
-                  <td style={styles.td}>{new Date(entry.ts).toLocaleString()}</td>
+                  <td>{entry.type}</td>
+                  <td>{describeEntry(entry)}</td>
+                  <td>{new Date(entry.ts).toLocaleString()}</td>
                 </tr>
               ))}
             </tbody>
@@ -529,81 +537,92 @@ export default function AdminAuditPanel() {
         </div>
       </section>
 
-      <section style={section}>
-        <h3>Per-token transfer history</h3>
-        <form onSubmit={handleHistoryLookup}>
-          <label>
-            Token ID:{" "}
+      <section className="panel">
+        <h3 className="panel__title">Per-token transfer history</h3>
+        <form onSubmit={handleHistoryLookup} className="inline-form mt-3">
+          <label className="field" style={{ marginBottom: 0 }}>
+            <span className="field__label-text">Token ID</span>
             <input value={historyTokenId} onChange={(e) => setHistoryTokenId(e.target.value)} required />
           </label>
-          <button type="submit" disabled={historyBusy}>{historyBusy ? "Looking up..." : "Lookup"}</button>
+          <button type="submit" className="btn" disabled={historyBusy}>{historyBusy ? "Looking up..." : "Lookup"}</button>
         </form>
         {history && (
-          <ul>
+          <ul className="item-list mt-3">
             {history.map((h, i) => (
-              <li key={i}>
-                {h.from} → {h.to} at {new Date(Number(h.timestamp) * 1000).toLocaleString()}
+              <li key={i} className="item-list__row">
+                <span className="mono">{h.from}</span> → <span className="mono">{h.to}</span> at{" "}
+                {new Date(Number(h.timestamp) * 1000).toLocaleString()}
               </li>
             ))}
           </ul>
         )}
       </section>
 
-      <section style={section}>
-        <h3>Per-identity compliance record</h3>
-        <form onSubmit={handleComplianceLookup}>
-          <label>
-            Address:{" "}
-            <input value={complianceAddress} onChange={(e) => setComplianceAddress(e.target.value)} placeholder="0x..." required />
+      <section className="panel">
+        <h3 className="panel__title">Per-identity compliance record</h3>
+        <form onSubmit={handleComplianceLookup} className="inline-form mt-3">
+          <label className="field" style={{ marginBottom: 0 }}>
+            <span className="field__label-text">Address</span>
+            <input
+              className="mono-input"
+              value={complianceAddress}
+              onChange={(e) => setComplianceAddress(e.target.value)}
+              placeholder="0x..."
+              required
+            />
           </label>
-          <button type="submit" disabled={complianceBusy}>{complianceBusy ? "Looking up..." : "Lookup"}</button>
+          <button type="submit" className="btn" disabled={complianceBusy}>{complianceBusy ? "Looking up..." : "Lookup"}</button>
         </form>
         {compliance && (
-          <ul>
-            <li>Registered at: {formatTs(compliance.registeredAt)}</li>
-            <li>Last updated at: {formatTs(compliance.lastUpdatedAt)}</li>
-            <li>Revoked at: {compliance.revokedAt !== "0" ? formatTs(compliance.revokedAt) : "never"}</li>
-            <li>Revocation count: {compliance.revocationCount}</li>
-          </ul>
+          <dl className="kv-list mt-3">
+            <dt>Registered at</dt>
+            <dd>{formatTs(compliance.registeredAt)}</dd>
+            <dt>Last updated at</dt>
+            <dd>{formatTs(compliance.lastUpdatedAt)}</dd>
+            <dt>Revoked at</dt>
+            <dd>{compliance.revokedAt !== "0" ? formatTs(compliance.revokedAt) : "never"}</dd>
+            <dt>Revocation count</dt>
+            <dd>{compliance.revocationCount}</dd>
+          </dl>
         )}
       </section>
 
-      <section style={section}>
-        <h3>Pending approvals</h3>
-        <p style={styles.hint}>
+      <section className="panel">
+        <h3 className="panel__title">Pending approvals</h3>
+        <p className="hint-text mt-3">
           revokeIdentity and reclaimAsset require 2-of-N co-signer approval (see RoleRegistry's
           CO_SIGNER_ROLE) - proposing one below only creates a proposal here. A different
           co-signer (not the proposer) must approve it before it takes effect.
         </p>
-        <button onClick={loadPendingApprovals} disabled={pendingLoading}>
+        <button className="btn btn--secondary btn--sm mt-3" onClick={loadPendingApprovals} disabled={pendingLoading}>
           {pendingLoading ? "Loading..." : "Refresh"}
         </button>
         {pendingApprovals.length === 0 ? (
-          <p>No pending proposals.</p>
+          <p className="text-muted mt-3">No pending proposals.</p>
         ) : (
-          <ul>
+          <ul className="item-list mt-3">
             {pendingApprovals.map((p) => {
               const isProposer = address && p.proposer.toLowerCase() === address.toLowerCase();
               const alreadyApproved = approvedByMe.has(p.proposalId);
               const canApprove = roles.isCoSigner && !isProposer && !alreadyApproved;
               return (
-                <li key={p.proposalId} style={{ marginBottom: 12 }}>
+                <li key={p.proposalId} className="item-list__row">
                   <div>
-                    <strong>#{p.proposalId} {p.actionType}</strong>
-                    {p.actionType === "RevokeIdentity" && <span> — revoke {p.account}</span>}
+                    <strong>#{p.proposalId}</strong> <span className="badge badge--neutral">{p.actionType}</span>
+                    {p.actionType === "RevokeIdentity" && <span> — revoke <span className="mono">{p.account}</span></span>}
                     {p.actionType === "ReclaimAsset" && (
-                      <span> — reclaim #{p.tokenId} to {p.newOwner}</span>
+                      <span> — reclaim #{p.tokenId} to <span className="mono">{p.newOwner}</span></span>
                     )}
                   </div>
-                  <div style={styles.small}>
-                    Proposed by {p.proposer} at {new Date(Number(p.proposedAt) * 1000).toLocaleString()}
+                  <div className="small-text mt-3">
+                    Proposed by <span className="mono">{p.proposer}</span> at {new Date(Number(p.proposedAt) * 1000).toLocaleString()}
                     {" — "}
-                    {p.approvalCount}/{p.requiredApprovals} approvals
+                    <span className="badge badge--pending">{p.approvalCount}/{p.requiredApprovals} approvals</span>
                     {isProposer && " (you proposed this)"}
                     {!isProposer && alreadyApproved && " (you already approved)"}
                   </div>
                   {canApprove && (
-                    <button onClick={() => handleApprove(p)} disabled={approveBusyId === p.proposalId}>
+                    <button className="btn btn--sm mt-3" onClick={() => handleApprove(p)} disabled={approveBusyId === p.proposalId}>
                       {approveBusyId === p.proposalId ? "Approving..." : "Approve"}
                     </button>
                   )}
@@ -612,92 +631,84 @@ export default function AdminAuditPanel() {
             })}
           </ul>
         )}
-        {approveStatus && <p>{approveStatus}</p>}
+        {approveStatus && <p className="alert alert--success mt-3">{approveStatus}</p>}
       </section>
 
       {roles.isAdmin && (
-        <section style={section}>
-          <h3>Register identity</h3>
-          <p style={styles.hint}>
+        <section className="panel">
+          <h3 className="panel__title">Register identity</h3>
+          <p className="hint-text mt-3">
             Submits a registration signed by someone else - paste the signature (and the
             exact account/DID/metadata URI it was signed for) from the Identity tab's
             "Generate signature" flow on *their* wallet, or from scripts/signRegistration.js.
             The signature must match these fields exactly or the on-chain check rejects it.
           </p>
-          <form onSubmit={handleRegister}>
-            <div>
-              <label>
-                Account:{" "}
-                <input value={regAccount} onChange={(e) => setRegAccount(e.target.value)} placeholder="0x..." required />
-              </label>
-            </div>
-            <div>
-              <label>
-                DID:{" "}
-                <input value={regDid} onChange={(e) => setRegDid(e.target.value)} placeholder="did:ethr:0x..." required />
-              </label>
-            </div>
-            <div>
-              <label>
-                Metadata URI:{" "}
-                <input value={regUri} onChange={(e) => setRegUri(e.target.value)} placeholder="ipfs://..." required />
-              </label>
-            </div>
-            <div>
-              <label>
-                Signature:{" "}
-                <textarea
-                  value={regSignature}
-                  onChange={(e) => setRegSignature(e.target.value)}
-                  placeholder="0x..."
-                  rows={2}
-                  style={styles.textarea}
-                  required
-                />
-              </label>
-            </div>
-            <button type="submit" disabled={regBusy}>{regBusy ? "Registering..." : "Register"}</button>
+          <form onSubmit={handleRegister} className="mt-3">
+            <label className="field">
+              <span className="field__label-text">Account</span>
+              <input className="mono-input" value={regAccount} onChange={(e) => setRegAccount(e.target.value)} placeholder="0x..." required />
+            </label>
+            <label className="field">
+              <span className="field__label-text">DID</span>
+              <input value={regDid} onChange={(e) => setRegDid(e.target.value)} placeholder="did:ethr:0x..." required />
+            </label>
+            <label className="field">
+              <span className="field__label-text">Metadata URI</span>
+              <input value={regUri} onChange={(e) => setRegUri(e.target.value)} placeholder="ipfs://..." required />
+            </label>
+            <label className="field field--wide">
+              <span className="field__label-text">Signature</span>
+              <textarea
+                className="mono-input"
+                value={regSignature}
+                onChange={(e) => setRegSignature(e.target.value)}
+                placeholder="0x..."
+                rows={2}
+                required
+              />
+            </label>
+            <button type="submit" className="btn" disabled={regBusy}>{regBusy ? "Registering..." : "Register"}</button>
           </form>
-          {regStatus && <p>{regStatus}</p>}
+          {regStatus && <p className="alert alert--success mt-3">{regStatus}</p>}
         </section>
       )}
 
       {roles.isCoSigner && (
         <>
-          <section style={section}>
-            <h3>Propose: revoke identity</h3>
-            <p style={styles.hint}>
+          <section className="panel">
+            <h3 className="panel__title">Propose: revoke identity</h3>
+            <p className="hint-text mt-3">
               Requires a second, different co-signer's approval below before this takes effect
               - see "Pending approvals" above.
             </p>
-            <form onSubmit={handleRevoke}>
-              <label>
-                Address:{" "}
-                <input value={revokeAddress} onChange={(e) => setRevokeAddress(e.target.value)} placeholder="0x..." required />
+            <form onSubmit={handleRevoke} className="mt-3">
+              <label className="field">
+                <span className="field__label-text">Address</span>
+                <input className="mono-input" value={revokeAddress} onChange={(e) => setRevokeAddress(e.target.value)} placeholder="0x..." required />
               </label>
-              <button type="submit" disabled={revokeBusy}>{revokeBusy ? "Proposing..." : "Propose revoke"}</button>
+              <button type="submit" className="btn btn--danger" disabled={revokeBusy}>{revokeBusy ? "Proposing..." : "Propose revoke"}</button>
             </form>
-            {revokeStatus && <p>{revokeStatus}</p>}
+            {revokeStatus && <p className="alert alert--success mt-3">{revokeStatus}</p>}
           </section>
 
-          <section style={section}>
-            <h3>Propose: reclaim asset (revoked identity only)</h3>
-            <p style={styles.hint}>
+          <section className="panel">
+            <h3 className="panel__title">Propose: reclaim asset (revoked identity only)</h3>
+            <p className="hint-text mt-3">
               Requires a second, different co-signer's approval below before this takes effect
               - see "Pending approvals" above.
             </p>
-            <form onSubmit={handleReclaim}>
-              <label>
-                Token ID:{" "}
+            <form onSubmit={handleReclaim} className="field-row mt-3">
+              <label className="field" style={{ marginBottom: 0 }}>
+                <span className="field__label-text">Token ID</span>
                 <input value={reclaimTokenId} onChange={(e) => setReclaimTokenId(e.target.value)} required />
-              </label>{" "}
-              <label>
-                New owner:{" "}
-                <input value={reclaimNewOwner} onChange={(e) => setReclaimNewOwner(e.target.value)} placeholder="0x..." required />
               </label>
-              <button type="submit" disabled={reclaimBusy}>{reclaimBusy ? "Proposing..." : "Propose reclaim"}</button>
+              <label className="field" style={{ marginBottom: 0 }}>
+                <span className="field__label-text">New owner</span>
+                <input className="mono-input" value={reclaimNewOwner} onChange={(e) => setReclaimNewOwner(e.target.value)} placeholder="0x..." required />
+              </label>
+              <button type="submit" className="btn btn--danger" disabled={reclaimBusy}>{reclaimBusy ? "Proposing..." : "Propose reclaim"}</button>
             </form>
-            {reclaimStatus && <p>{reclaimStatus}</p>}
+            {reclaimStatus && <p className="alert alert--success mt-3">{reclaimStatus}</p>}
           </section>
         </>
       )}
@@ -711,71 +722,37 @@ function formatTs(seconds) {
 
 const ACTION_TYPE_NAMES = ["RevokeIdentity", "ReclaimAsset"];
 
+function mono(value) {
+  return <span className="mono">{value}</span>;
+}
+
 function describeEntry(entry) {
   switch (entry.type) {
     case "IdentityRegistered":
-      return `${entry.account} — ${entry.did}`;
+      return <>{mono(entry.account)} — {entry.did}</>;
     case "IdentityRevoked":
-      return `${entry.account} — revoked`;
+      return <>{mono(entry.account)} — revoked</>;
     case "AssetMinted":
-      return `#${entry.tokenId} → ${entry.owner}`;
+      return <>#{entry.tokenId} → {mono(entry.owner)}</>;
     case "AssetTransferred":
-      return `#${entry.tokenId}: ${entry.from} → ${entry.to}`;
+      return <>#{entry.tokenId}: {mono(entry.from)} → {mono(entry.to)}</>;
     case "AssetReclaimed":
-      return `#${entry.tokenId}: ${entry.from} → ${entry.to} (reclaimed)`;
+      return <>#{entry.tokenId}: {mono(entry.from)} → {mono(entry.to)} (reclaimed)</>;
     case "PlatformPaused":
-      return `Asset operations paused by ${entry.admin}`;
+      return <>Asset operations paused by {mono(entry.admin)}</>;
     case "PlatformUnpaused":
-      return `Asset operations unpaused by ${entry.admin}`;
+      return <>Asset operations unpaused by {mono(entry.admin)}</>;
     case "IdentityRegistryPaused":
-      return `Identity operations paused by ${entry.admin}`;
+      return <>Identity operations paused by {mono(entry.admin)}</>;
     case "IdentityRegistryUnpaused":
-      return `Identity operations unpaused by ${entry.admin}`;
+      return <>Identity operations unpaused by {mono(entry.admin)}</>;
     case "ActionProposed":
-      return `#${entry.proposalId} ${ACTION_TYPE_NAMES[entry.actionType] ?? entry.actionType} proposed by ${entry.proposer}`;
+      return <>#{entry.proposalId} {ACTION_TYPE_NAMES[entry.actionType] ?? entry.actionType} proposed by {mono(entry.proposer)}</>;
     case "ActionApproved":
-      return `#${entry.proposalId} approved by ${entry.approver} (${entry.approvalCount}/2)`;
+      return <>#{entry.proposalId} approved by {mono(entry.approver)} ({entry.approvalCount}/2)</>;
     case "ActionExecuted":
-      return `#${entry.proposalId} executed`;
+      return <>#{entry.proposalId} executed</>;
     default:
       return JSON.stringify(entry);
   }
 }
-
-const box = { border: "1px solid #ccc", padding: 16, marginBottom: 16 };
-const section = { marginTop: 16, paddingTop: 16, borderTop: "1px solid #eee" };
-const styles = {
-  error: { color: "#b00020" },
-  hint: { fontSize: 13, color: "#555" },
-  small: { fontSize: 12, color: "#555" },
-  scroll: { maxHeight: 240, overflowY: "auto" },
-  table: { width: "100%", borderCollapse: "collapse" },
-  th: { textAlign: "left", borderBottom: "1px solid #ccc", padding: "4px 8px", position: "sticky", top: 0, background: "#fff" },
-  td: { borderBottom: "1px solid #eee", padding: "4px 8px" },
-  textarea: { width: "100%", fontFamily: "monospace", fontSize: 12, display: "block" },
-  pausedBannerTitle: { fontSize: 20, fontWeight: "bold" },
-  pausedBanner: {
-    background: "#fdeaea",
-    border: "2px solid #b00020",
-    color: "#7a0016",
-    padding: 16,
-    borderRadius: 4,
-    marginBottom: 16
-  },
-  activeBanner: {
-    background: "#eaf7ea",
-    border: "2px solid #1a7a1a",
-    color: "#14591a",
-    padding: 16,
-    borderRadius: 4,
-    marginBottom: 16
-  },
-  partialBanner: {
-    background: "#fff4e0",
-    border: "2px solid #b26a00",
-    color: "#7a4b00",
-    padding: 16,
-    borderRadius: 4,
-    marginBottom: 16
-  }
-};

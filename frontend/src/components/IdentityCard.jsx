@@ -39,9 +39,9 @@ export default function IdentityCard() {
 
   if (!address) {
     return (
-      <div style={box}>
-        <h2>My identity</h2>
-        <p>Connect your wallet to view your DID and credential status.</p>
+      <div className="panel">
+        <h2 className="page-title">My identity</h2>
+        <p className="text-muted">Connect your wallet to view your DID and credential status.</p>
       </div>
     );
   }
@@ -86,54 +86,65 @@ export default function IdentityCard() {
   };
 
   return (
-    <div style={box}>
-      <h2>My identity</h2>
-      {loading && <p>Loading...</p>}
-      {error && <p style={styles.error}>{error}</p>}
+    <div className="panel">
+      <h2 className="page-title">My identity</h2>
+      {loading && <p className="text-muted">Loading...</p>}
+      {error && <p className="alert alert--error">{error}</p>}
 
       {isRegistered ? (
-        <div>
-          <p><strong>DID:</strong> {identity.did}</p>
-          <p><strong>Metadata URI:</strong> {identity.metadataURI}</p>
-          <p><strong>Status:</strong> Active</p>
-        </div>
+        <dl className="kv-list">
+          <dt>DID</dt>
+          <dd>{identity.did}</dd>
+          <dt>Metadata URI</dt>
+          <dd>{identity.metadataURI}</dd>
+          <dt>Status</dt>
+          <dd><span className="badge badge--active">Active</span></dd>
+        </dl>
       ) : (
         <div>
           <p>No active identity registered for this address yet.</p>
-          <p style={styles.hint}>
+          <p className="hint-text">
             Registration must be submitted by an admin - the contract has no self-service
             path. Generate your consent signature below and send it, plus the calldata, to
             an admin to submit on-chain (the same signature scripts/signRegistration.js
             produces from the command line).
           </p>
           <form onSubmit={handleSign}>
-            <div>
-              <label>
-                DID:{" "}
-                <input value={regDid} onChange={(e) => setRegDid(e.target.value)} placeholder="did:ethr:0x..." required />
-              </label>
-            </div>
-            <div>
-              <label>
-                Metadata URI:{" "}
-                <input value={regUri} onChange={(e) => setRegUri(e.target.value)} placeholder="ipfs://..." required />
-              </label>
-            </div>
-            <button type="submit" disabled={regBusy}>{regBusy ? "Signing..." : "Generate signature"}</button>
+            <label className="field">
+              <span className="field__label-text">DID</span>
+              <input value={regDid} onChange={(e) => setRegDid(e.target.value)} placeholder="did:ethr:0x..." required />
+            </label>
+            <label className="field">
+              <span className="field__label-text">Metadata URI</span>
+              <input value={regUri} onChange={(e) => setRegUri(e.target.value)} placeholder="ipfs://..." required />
+            </label>
+            <button type="submit" className="btn" disabled={regBusy}>{regBusy ? "Signing..." : "Generate signature"}</button>
           </form>
           {regResult && (
-            <div style={{ marginTop: 12 }}>
+            <div className="subsection">
               <p>Send these to an admin:</p>
-              <label>
-                Signature
-                <textarea readOnly value={regResult.signature} rows={2} style={styles.textarea} onFocus={(e) => e.target.select()} />
+              <label className="field field--wide">
+                <span className="field__label-text">Signature</span>
+                <textarea
+                  readOnly
+                  value={regResult.signature}
+                  rows={2}
+                  className="mono-input"
+                  onFocus={(e) => e.target.select()}
+                />
               </label>
-              <label>
-                Calldata (registerIdentity)
-                <textarea readOnly value={regResult.calldata} rows={3} style={styles.textarea} onFocus={(e) => e.target.select()} />
+              <label className="field field--wide">
+                <span className="field__label-text">Calldata (registerIdentity)</span>
+                <textarea
+                  readOnly
+                  value={regResult.calldata}
+                  rows={3}
+                  className="mono-input"
+                  onFocus={(e) => e.target.select()}
+                />
               </label>
-              <p style={styles.small}>
-                Nonce used: {regResult.nonce} — contract: {regResult.contractAddress}
+              <p className="small-text">
+                Nonce used: {regResult.nonce} — contract: <span className="mono">{regResult.contractAddress}</span>
               </p>
             </div>
           )}
@@ -141,24 +152,16 @@ export default function IdentityCard() {
       )}
 
       {isRegistered && roles.isUser && (
-        <form onSubmit={handleUpdate} style={{ marginTop: 16 }}>
-          <h3>Update my metadata</h3>
-          <label>
-            New metadata URI:{" "}
+        <form onSubmit={handleUpdate} className="subsection">
+          <h3 className="subsection__title">Update my metadata</h3>
+          <label className="field">
+            <span className="field__label-text">New metadata URI</span>
             <input value={metaUri} onChange={(e) => setMetaUri(e.target.value)} placeholder="ipfs://..." required />
           </label>
-          <button type="submit" disabled={updateBusy}>{updateBusy ? "Submitting..." : "Update"}</button>
-          {updateStatus && <p>{updateStatus}</p>}
+          <button type="submit" className="btn" disabled={updateBusy}>{updateBusy ? "Submitting..." : "Update"}</button>
+          {updateStatus && <p className="alert alert--success">{updateStatus}</p>}
         </form>
       )}
     </div>
   );
 }
-
-const box = { border: "1px solid #ccc", padding: 16, marginBottom: 16 };
-const styles = {
-  error: { color: "#b00020" },
-  hint: { fontSize: 13, color: "#555" },
-  small: { fontSize: 12, color: "#555" },
-  textarea: { width: "100%", fontFamily: "monospace", fontSize: 12, display: "block" }
-};

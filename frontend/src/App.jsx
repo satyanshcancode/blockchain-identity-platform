@@ -31,22 +31,24 @@ function Tabs() {
   const activeTab = tabs.some((t) => t.key === tab) ? tab : "identity";
 
   return (
-    <div>
-      <nav style={styles.nav}>
+    <>
+      <nav className="tabs">
         {tabs.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            style={t.key === activeTab ? styles.tabActive : styles.tab}
+            className={t.key === activeTab ? "tab-btn tab-btn--active" : "tab-btn"}
           >
             {t.label}
           </button>
         ))}
       </nav>
-      {activeTab === "identity" && <IdentityCard />}
-      {activeTab === "assets" && <AssetList />}
-      {activeTab === "admin" && <AdminAuditPanel />}
-    </div>
+      <main className="app-main">
+        {activeTab === "identity" && <IdentityCard />}
+        {activeTab === "assets" && <AssetList />}
+        {activeTab === "admin" && <AdminAuditPanel />}
+      </main>
+    </>
   );
 }
 
@@ -58,21 +60,13 @@ export default function App() {
 
   return (
     <WalletProvider>
-      <div style={{ fontFamily: "sans-serif" }}>
-        <div style={{ padding: "0 24px" }}>
-          <h1>Identity & Asset Platform</h1>
-        </div>
+      <div className="app-shell">
+        <header className="app-header">
+          <h1 className="app-header__title">Identity & Asset Platform</h1>
+        </header>
         <WalletConnect />
-        <div style={{ padding: "0 24px 24px" }}>
-          <Tabs />
-        </div>
+        <Tabs />
       </div>
     </WalletProvider>
   );
 }
-
-const styles = {
-  nav: { padding: "0 24px", marginBottom: 16, display: "flex", gap: 8 },
-  tab: { padding: "6px 12px", background: "#eee", border: "1px solid #ccc", cursor: "pointer" },
-  tabActive: { padding: "6px 12px", background: "#333", color: "#fff", border: "1px solid #333", cursor: "pointer" }
-};

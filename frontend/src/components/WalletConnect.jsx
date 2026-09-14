@@ -18,20 +18,22 @@ export default function WalletConnect() {
 
   if (!hasMetaMask) {
     return (
-      <div style={styles.bar}>
-        <strong>MetaMask not detected.</strong>{" "}
-        Install the <a href="https://metamask.io/" target="_blank" rel="noreferrer">MetaMask extension</a> to use this app.
+      <div className="wallet-bar wallet-bar--notice">
+        <span>
+          <strong>MetaMask not detected.</strong>{" "}
+          Install the <a href="https://metamask.io/" target="_blank" rel="noreferrer">MetaMask extension</a> to use this app.
+        </span>
       </div>
     );
   }
 
   if (!address) {
     return (
-      <div style={styles.bar}>
-        <button onClick={connect} disabled={connecting}>
+      <div className="wallet-bar">
+        <button className="btn btn--sm" onClick={connect} disabled={connecting}>
           {connecting ? "Connecting..." : "Connect wallet"}
         </button>
-        {error && <span style={styles.error}> {error}</span>}
+        {error && <span className="text-error"> {error}</span>}
       </div>
     );
   }
@@ -40,23 +42,29 @@ export default function WalletConnect() {
   const wrongNetwork = chainId !== EXPECTED_CHAIN_ID;
 
   return (
-    <div style={styles.bar}>
-      <span><strong>Connected:</strong> {address}</span>
-      <span style={{ marginLeft: 16 }}>
-        <strong>Roles:</strong> {labels.length > 0 ? labels.join(", ") : "none"}
+    <div className="wallet-bar">
+      <span className="wallet-bar__group">
+        <span className="wallet-bar__label">Connected</span>
+        <span className="mono">{address}</span>
+      </span>
+      <span className="wallet-bar__group">
+        <span className="wallet-bar__label">Roles</span>
+        {labels.length > 0 ? (
+          <span className="wallet-bar__roles">
+            {labels.map((label) => (
+              <span key={label} className="badge badge--role">{label}</span>
+            ))}
+          </span>
+        ) : (
+          <span className="text-muted">none</span>
+        )}
       </span>
       {wrongNetwork && (
-        <span style={styles.warning}>
-          {" "}Wrong network (chain {chainId}, expected {EXPECTED_CHAIN_ID}) - switch networks in MetaMask.
+        <span className="text-warning">
+          Wrong network (chain {chainId}, expected {EXPECTED_CHAIN_ID}) - switch networks in MetaMask.
         </span>
       )}
-      {error && <span style={styles.error}> {error}</span>}
+      {error && <span className="text-error">{error}</span>}
     </div>
   );
 }
-
-const styles = {
-  bar: { padding: 12, background: "#f5f5f5", borderBottom: "1px solid #ccc", marginBottom: 16 },
-  error: { color: "#b00020" },
-  warning: { color: "#b06000" }
-};
