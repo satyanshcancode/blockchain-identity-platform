@@ -2,16 +2,18 @@
 // directly from the browser (see backend/src/routes/*.js) - the backend
 // already indexes/serves this data and is faster/simpler than re-deriving
 // it client-side. WRITES live in ./contractService.js instead.
+//
+// This module is the WALLET-CONNECTED view of the API: the role-gated calls
+// at the bottom plus, re-exported for convenience, the public reads. The
+// public reads themselves now live in ./publicApi.js so that the public
+// verification page can import them without dragging this file's wallet
+// dependency (./apiAuth -> ./contractService) into its import graph - see the
+// note at the top of that file. Anything wallet-connected should keep
+// importing from here; only VerifyPage needs the narrower surface.
 import { getApiAuthHeaders, clearApiAuthCache } from "./apiAuth";
+import { API_BASE_URL } from "../config/origins";
 
-const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000";
-
-async function request(path) {
-  const res = await fetch(`${API_URL}${path}`);
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `Request failed: ${res.status}`);
-  return body;
-}
+const API_URL = API_BASE_URL;
 
 // For routes gated by backend/src/auth/apiAuth.js's requireRole middleware
 // (audit log, compliance records, anomalies, pending approvals). Attaches a
@@ -43,11 +45,9 @@ async function requestAuthed(path, signer, address, { method = "GET", body: requ
   }
 }
 
-export const getAssets = () => request("/api/assets");
-export const getAsset = (tokenId) => request(`/api/assets/${tokenId}`);
-export const getAssetsByOwner = (address) => request(`/api/assets/owner/${address}`);
-export const getAssetHistory = (tokenId) => request(`/api/assets/${tokenId}/history`);
-export const getIdentity = (address) => request(`/api/identity/${address}`);
+// Public, unauthenticated reads - single implementation in ./publicApi.js,
+// re-exported here so existing wallet-connected callers keep one import.
+export { getAssets, getAsset, getAssetsByOwner, getAssetHistory, getIdentity } from "./publicApi";
 
 export const getAuditLog = (signer, address) => requestAuthed("/api/audit", signer, address);
 export const getAnomalies = (signer, address) => requestAuthed("/api/audit/anomalies", signer, address);

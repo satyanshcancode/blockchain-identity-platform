@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { getAsset, getAssetHistory, getIdentity } from "../services/api";
+import { getAsset, getAssetHistory, getIdentity } from "../services/publicApi";
 
 // Public, wallet-free verification page - deliberately does NOT import or
 // use WalletContext/useWallet. Anyone (no MetaMask, never touched crypto,
@@ -8,6 +8,14 @@ import { getAsset, getAssetHistory, getIdentity } from "../services/api";
 // backend/src/routes/assets.js's getPrivilegedContract() - the
 // auditor/admin-gated history read is signed with the backend's OWN key,
 // not the visitor's, which is exactly what makes that true.
+//
+// Data comes from ../services/publicApi, NOT ../services/api: the latter also
+// exposes the role-gated calls and so statically imports the MetaMask/ethers
+// wiring, which has no business being in this page's import graph. This page
+// must render fully with window.ethereum undefined, and it must never talk to
+// the RPC endpoint (port 8545) directly - a phone can't reach that either.
+// App.jsx also matches this route and renders this component *before*
+// WalletProvider mounts, so there is no wallet context above it to depend on.
 export default function VerifyPage({ tokenId }) {
   const [asset, setAsset] = useState(null);
   const [history, setHistory] = useState(null);

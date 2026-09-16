@@ -58,8 +58,10 @@ Five on-chain roles, each gating distinct capability:
 - Real block timestamps, so anomaly detection stays accurate after downtime replay
 
 ### Public verification
-- Wallet-free verification page with scannable QR codes
+- Wallet-free verification page with scannable QR codes — no extension, no signature, no sign-in; renders fully with `window.ethereum` undefined
 - Shows current owner, metadata, full custody history, and a prominent warning if the current holder's identity has been revoked
+- Reads only the unauthenticated, strictly read-only REST routes; never touches the RPC endpoint, which a phone cannot reach either
+- One `PUBLIC_HOST` variable controls the origin QR codes encode, so codes are scannable off-device (see [Quick start](#public-qr-verification--set-public_host))
 
 ---
 
@@ -96,6 +98,7 @@ All access rules live in **Layer 1**. Compromising the backend does not grant th
 ```bash
 git clone <repository-url>
 cd blockchain-identity-platform
+cp .env.example .env     # then set PUBLIC_HOST — see below
 docker compose up --build
 ```
 
@@ -106,6 +109,37 @@ First run takes a few minutes. When it settles, three services are running:
 | Frontend | http://localhost:3000 |
 | Backend API | http://localhost:4000 |
 | Blockchain node | http://localhost:8545 |
+
+### Public QR verification — set `PUBLIC_HOST`
+
+Every asset gets a QR code that opens a wallet-free public verification page. For
+another device to open it, the QR has to encode an address that device can
+actually reach — so **one** variable in the root `.env` controls public
+reachability:
+
+```bash
+PUBLIC_HOST=192.168.1.50    # this machine's LAN IP
+```
+
+`PUBLIC_HOST` feeds three things: the origin baked into every QR code, the API
+base URL the browser fetches from, and the CORS allowlist for the role-gated
+admin routes. Find your LAN IP with `ipconfig` (Windows, the Wi-Fi adapter's
+IPv4 Address), `ipconfig getifaddr en0` (macOS), or `hostname -I` (Linux).
+
+Leave it as `localhost` and everything still works on this machine, but QR codes
+will be unscannable from a phone — `localhost` resolves to the scanning phone
+itself. The Assets tab shows a warning banner when that is the case.
+
+To demo it: open `http://<PUBLIC_HOST>:3000`, go to **Assets**, and scan any
+row's QR code from a phone on the same Wi-Fi. The page needs no wallet, no
+extension, and no sign-in. Ports `3000` and `4000` must both be reachable from
+the phone (Docker publishes them on all interfaces; check your host firewall if
+a scan times out).
+
+> `REACT_APP_*` variables are inlined when the dev server boots, so changing
+> `PUBLIC_HOST` needs a full `docker compose down && docker compose up -d` — a
+> partial `--force-recreate frontend` will sit and wait for a fresh deploy that
+> never comes, since `hardhat-node` did not restart.
 
 ### Connect MetaMask
 
@@ -139,6 +173,17 @@ npx hardhat test
 ```
 
 The contract test suite covers each access-control property individually — signature verification, replay protection, role gating, pause behaviour, multi-signature approval, self-approval rejection, and reclaim constraints.
+
+```bash
+npm --prefix frontend run check:verify-isolation
+```
+
+Asserts that the public verification page cannot reach wallet code: it walks
+VerifyPage's full static import closure and fails if anything in it references
+MetaMask, `BrowserProvider`, `ethers`, or the wallet context. A wallet-free
+visitor scanning a QR code has to be able to render that page, and the
+dependency that would break it is invisible at the call site — `VerifyPage`
+importing the wrong service module pulls in the wallet three hops down.
 
 For manual verification, see the testing guide in `docs/`.
 
@@ -195,7 +240,8 @@ Stated openly rather than discovered later:
 
 - **The oracle problem.** The system proves a *record* of custody changed, not that the *physical asset* moved. Custody claims are permanently attributable to a verified identity and cannot be altered afterwards, but binding record to reality is an organisational process, not something blockchain solves alone.
 - **Prototype status.** Runs on a local test network. Production would require an independent security audit, enterprise key management in place of browser wallets, and API hardening for scale.
-- **No automated backend/frontend tests.** Contract logic has automated coverage; backend and frontend are verified manually.
+- **No automated backend/frontend tests.** Contract logic has automated coverage; backend and frontend are verified manually, apart from the verify-page isolation check under [Testing](#testing).
+- **SPA routing depends on the dev server.** A direct hit on `/verify/<id>` returns `index.html` because the React dev server has history-API fallback enabled. A production `npm run build` served by a plain static file server would 404 on that path — the static server needs an explicit rewrite of unknown paths to `index.html`.
 - **Governance dependency.** Multi-signature protection is only as strong as the genuine independence of the co-signers — not something software can enforce.
 
 ---

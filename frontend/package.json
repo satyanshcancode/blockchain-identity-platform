@@ -10,7 +10,8 @@
   },
   "scripts": {
     "start": "node scripts/loadAddresses.js && react-scripts start",
-    "build": "react-scripts build"
+    "build": "react-scripts build",
+    "check:verify-isolation": "node scripts/checkVerifyPageIsolation.js"
   },
   "devDependencies": {
     "react-scripts": "5.0.1"

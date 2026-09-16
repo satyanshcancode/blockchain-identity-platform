@@ -2,6 +2,7 @@ const express = require("express");
 const { ethers } = require("ethers");
 const { resolveDID } = require("../did/didResolver");
 const { requireRole } = require("../auth/apiAuth");
+const { publicCors, privateCors } = require("../config/cors");
 
 const router = express.Router();
 
@@ -45,7 +46,14 @@ function requireValidAddress(req, res) {
   return true;
 }
 
-router.get("/:address", async (req, res) => {
+// GET /api/identity/:address — public DID lookup (did, metadataURI, active).
+// Unauthenticated by design and reachable from any origin: the public
+// verification page needs it to show whether an asset's current holder has a
+// revoked identity, and that page is loaded by wallet-free visitors scanning a
+// QR code. Nothing here is privileged - getIdentity() has no on-chain access
+// restriction either. Its auditor/admin-only sibling below is a separate
+// route with a separate policy; this mount does not affect it.
+router.get("/:address", publicCors, async (req, res) => {
   if (!requireValidAddress(req, res)) return;
   try {
     const identity = await resolveDID(req.params.address);
@@ -61,8 +69,13 @@ router.get("/:address", async (req, res) => {
 
 // GET /api/identity/:address/compliance — Auditor/Admin-only registration/
 // revocation history. Caller-authenticated by requireRole() (see the note
-// above getPrivilegedContract()).
-router.get("/:address/compliance", requireRole("AUDITOR", "ADMIN"), async (req, res) => {
+// above getPrivilegedContract()), and — unlike the public lookup above —
+// restricted to the operator-console origin allowlist. The explicit .options()
+// is needed because this is the one gated route not mounted behind
+// privateCors at the app level (its router is shared with a public route), and
+// the X-Auth-* headers the frontend sends make the browser preflight it.
+router.options("/:address/compliance", privateCors);
+router.get("/:address/compliance", privateCors, requireRole("AUDITOR", "ADMIN"), async (req, res) => {
   if (!requireValidAddress(req, res)) return;
   try {
     const contract = getPrivilegedContract();

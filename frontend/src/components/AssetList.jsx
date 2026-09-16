@@ -3,13 +3,22 @@ import { QRCodeSVG } from "qrcode.react";
 import { useWallet } from "../context/WalletContext";
 import { getAssets, getAssetsByOwner } from "../services/api";
 import { mintAsset, transferAsset } from "../services/contractService";
+import { PUBLIC_BASE_URL, isQrOriginUnreachableOffDevice } from "../config/origins";
 
-// window.location.origin so the URL is absolute and actually reachable when
-// scanned from a phone (a QR code has no notion of "relative to this app"),
-// not just a path for in-app navigation.
+// Absolute URL, because a QR code has no notion of "relative to this app" -
+// and specifically built from PUBLIC_BASE_URL rather than
+// window.location.origin. Those are the same thing when nobody has configured
+// an origin, but window.location.origin alone meant the code encoded whatever
+// the operator happened to type into their own address bar: open the admin UI
+// at localhost (which is what the docs tell you to do) and every QR code
+// generated came out pointing at "localhost", which on a scanning phone is the
+// phone itself. See ../config/origins.js.
 function verifyUrl(tokenId) {
-  return `${window.location.origin}/verify/${tokenId}`;
+  return `${PUBLIC_BASE_URL}/verify/${tokenId}`;
 }
+
+// Computed once at module load, like the origin it describes.
+const QR_ORIGIN_IS_LOCAL_ONLY = isQrOriginUnreachableOffDevice();
 
 export default function AssetList() {
   const { address, signer, roles } = useWallet();
@@ -100,6 +109,17 @@ export default function AssetList() {
       </div>
 
       {error && <p className="alert alert--error">{error}</p>}
+
+      {QR_ORIGIN_IS_LOCAL_ONLY && assets.length > 0 && (
+        <div className="banner banner--warning">
+          <div className="banner__title">QR codes below are only scannable on this machine</div>
+          <div className="banner__body">
+            They encode <span className="mono">{PUBLIC_BASE_URL}</span>, which resolves to the scanning device itself.
+            To hand out codes another phone can open, set <span className="mono">PUBLIC_HOST</span> to this machine's LAN
+            IP and restart, or reload this page from that LAN address.
+          </div>
+        </div>
+      )}
 
       {assets.length === 0 && !loading ? (
         <p className="text-muted">No assets found.</p>
